@@ -193,7 +193,7 @@ function setSiteFile(url, data, headers = {}) {
   const contentType = getContentType(url)
   site.set(url, {
     header: {
-      // "Content-Type": "contentType",
+      "Content-Type": contentType,
       // "Content-Length": data.length,
       ...headers,
     },
