@@ -110,18 +110,18 @@ function stripUrl(url) {
   if (index > 0) return url.slice(0, index)
   return url
 }
-function extractAuth(req) {}
 async function handleRequest(req, res) {
   const { url, method } = req
   let result = site.get(url)
   if (result === undefined) {
     let data
+    const exParam = { req, header: {}, statusCode: 200 }
     if (bodyMethod.includes(method)) {
       const paramObj = await getBody(req)
       data = api.get(stripUrl(url))?.(paramObj)
-    } else if (paramMethod.includes(method)) {
+    } else if (paramMethod.includes(method, exParam)) {
       const paramObj = getUrlParams(url)
-      data = api.get(stripUrl(url))?.(paramObj)
+      data = api.get(stripUrl(url))?.(paramObj, exParam)
     }
     if (data === undefined) {
       result = site.get(g_config.notFound) || nf
@@ -130,9 +130,10 @@ async function handleRequest(req, res) {
         header: {
           "Content-Type":
             typeof data === "string" ? "text/plain" : "application/json",
+          ...exParam.header,
         },
         data: typeof data === "string" ? data : JSON.stringify(data),
-        statusCode: 200,
+        statusCode: exParam.statusCode,
       }
     }
   }

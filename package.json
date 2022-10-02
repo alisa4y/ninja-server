@@ -17,6 +17,7 @@
         "html-minifier-terser": "^7.0.0-alpha.2",
         "js-bundler": "file:../js-bundler",
         "js-tools": "file:../js-tools",
+        "jsonwebtoken": "^8.5.1",
         "terser": "^5.10.0",
         "websocket": "^1.0.34"
     }
