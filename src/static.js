@@ -115,7 +115,7 @@ async function handleRequest(req, res) {
   let result = site.get(url)
   if (result === undefined) {
     let data
-    const exParam = { req, header: {}, statusCode: 200 }
+    const exParam = { req, headers: {}, statusCode: 200 }
     if (bodyMethod.includes(method)) {
       const paramObj = await getBody(req)
       data = api.get(stripUrl(url))?.(paramObj)
@@ -127,18 +127,18 @@ async function handleRequest(req, res) {
       result = site.get(g_config.notFound) || nf
     } else {
       result = {
-        header: {
+        headers: {
           "Content-Type":
             typeof data === "string" ? "text/plain" : "application/json",
-          ...exParam.header,
+          ...exParam.headers,
         },
         data: typeof data === "string" ? data : JSON.stringify(data),
         statusCode: exParam.statusCode,
       }
     }
   }
-  const { header, data, statusCode = 200 } = result
-  res.writeHead(statusCode, header)
+  const { headers, data, statusCode = 200 } = result
+  res.writeHead(statusCode, headers)
   res.end(data)
 }
 async function setup(workingDir) {
