@@ -126,6 +126,7 @@ async function handleRequest(req, res) {
     if (data === undefined) {
       result = site.get(g_config.notFound) || nf
     } else {
+      if (data === null) data = ""
       result = {
         headers: {
           "Content-Type":
