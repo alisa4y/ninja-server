@@ -118,10 +118,10 @@ async function handleRequest(req, res) {
     const exParam = { req, headers: {}, statusCode: 200 }
     if (bodyMethod.includes(method)) {
       const paramObj = await getBody(req)
-      data = api.get(stripUrl(url))?.(paramObj)
+      data = await api.get(stripUrl(url))?.(paramObj)
     } else if (paramMethod.includes(method, exParam)) {
       const paramObj = getUrlParams(url)
-      data = api.get(stripUrl(url))?.(paramObj, exParam)
+      data = await api.get(stripUrl(url))?.(paramObj, exParam)
     }
     if (data === undefined) {
       result = site.get(g_config.notFound) || nf
