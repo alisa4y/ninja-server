@@ -7,16 +7,21 @@ import {
   readdirSync,
 } from "fs"
 import { access, readFile } from "fs/promises"
-import { createServer } from "http"
-import { server as webSocketServer } from "websocket"
-import { shield, cell, err, each } from "js-tools"
+import { createServer, IncomingMessage, ServerResponse } from "http"
+import { connection, server as webSocketServer } from "websocket"
+import { shield, cell, err } from "flowco"
 import { join, extname, dirname, basename } from "path"
 import { fileURLToPath } from "url"
 import { impundler } from "js-bundler"
 // import { minify } from "html-minifier-terser"
 
-const __dirname = dirname(fileURLToPath(import.meta.url))
-let g_config
+let g_config: {
+  defaultFile: string
+  host: string
+  port: number
+  publicDir: string
+  watch: boolean
+}
 const configFileName = "server.config.js"
 const projectConfigFilePath = join(process.cwd(), configFileName)
 try {
@@ -32,14 +37,14 @@ g_config.defaultFile = joinUrl(g_config.defaultFile || "index.html")
 const site = new Map()
 const api = new Map()
 
-let httpServer
+let httpServer: ReturnType<typeof createServer>
 
 const { host, port } = g_config
 const uri = port === 80 ? `http://${host}` : `http://${host}:${port}`
 const workingDir = join(process.cwd(), g_config.publicDir)
 
 // -------------------------------  watch variables  -------------------------------
-const connections = new Set()
+const connections: Set<connection> = new Set()
 const setCounter = cell((counter, action) => {
   let v = counter
   switch (action) {
@@ -72,10 +77,10 @@ const nf = {
 }
 const bodyMethod = ["POST", "PUT"]
 const paramMethod = ["GET", "DELETE"]
-function getBody(req) {
+function getBody(req: typeof IncomingMessage) {
   return new Promise((res, rej) => {
     let body = ""
-    req.on("data", chunk => {
+    IncomingMessage.req.on("data", (chunk: string) => {
       body += chunk
     })
     req.on("end", () => {
