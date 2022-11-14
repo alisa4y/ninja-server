@@ -7,7 +7,12 @@ import {
   readdirSync,
 } from "fs"
 import { access, readFile } from "fs/promises"
-import { createServer, IncomingMessage, ServerResponse } from "http"
+import {
+  createServer,
+  IncomingMessage,
+  RequestListener,
+  ServerResponse,
+} from "http"
 import { connection, server as webSocketServer } from "websocket"
 import { shield, cell, err } from "flowco"
 import { join, extname, dirname, basename } from "path"
@@ -21,16 +26,27 @@ let g_config: {
   port: number
   publicDir: string
   watch: boolean
+  notFound: string
+  reloadExtRgx?: RegExp
+  skipExtensions?: string[]
+  plugins: Record<
+    string,
+    (path: string) => {
+      newExtensionName: string
+      content: Buffer
+      ignore: boolean
+    }
+  >
 }
 const configFileName = "server.config.js"
 const projectConfigFilePath = join(process.cwd(), configFileName)
 try {
-  g_config = (await import("file:///" + projectConfigFilePath)).default
+  g_config = require(projectConfigFilePath)
 } catch (e) {
   const configFilePath = join(__dirname, "..", configFileName)
   const configFile = readFileSync(configFilePath, "utf8")
   writeFileSync(projectConfigFilePath, configFile)
-  g_config = (await import("file:///" + projectConfigFilePath)).default
+  g_config = require(projectConfigFilePath)
 }
 g_config.defaultFile = joinUrl(g_config.defaultFile || "index.html")
 
@@ -58,7 +74,6 @@ const setCounter = cell((counter, action) => {
   v === 0 && connections.forEach(c => c.sendUTF("reload"))
   return v
 }, 0)
-
 export async function startServer() {
   await setup(workingDir)
 
@@ -69,7 +84,6 @@ export async function startServer() {
   if (g_config.watch) watchStructure()
   await initApi()
 }
-
 const nf = {
   header: { "Content-Type": "text/plain" },
   data: "Not Found",
@@ -77,10 +91,10 @@ const nf = {
 }
 const bodyMethod = ["POST", "PUT"]
 const paramMethod = ["GET", "DELETE"]
-function getBody(req: typeof IncomingMessage) {
+function getBody(req: InstanceType<typeof IncomingMessage>) {
   return new Promise((res, rej) => {
     let body = ""
-    IncomingMessage.req.on("data", (chunk: string) => {
+    req.on("data", (chunk: string) => {
       body += chunk
     })
     req.on("end", () => {
@@ -89,33 +103,38 @@ function getBody(req: typeof IncomingMessage) {
     req.on("error", rej)
   })
 }
-function getUrlParams(url) {
+type UrlParameters = Record<string, string | Array<string>>
+function getUrlParams(url: string) {
   const questionMarkIndex = url.indexOf("?")
   if (questionMarkIndex > 0) {
     return url
       .slice(questionMarkIndex)
       .split("&")
-      .reduce((o, str) => {
+      .reduce((o: UrlParameters, str: string) => {
         const [key, value] = str.split("=")
         if (value.length > 0) {
           if (o[key] === undefined) o[key] = value
           else if (Array.isArray(o[key])) {
-            o[key].push(value)
+            ;(o[key] as string[]).push(value)
           } else {
             const v = o[key]
-            o[key] = [v, value]
+            o[key] = [v as string, value]
           }
         }
-      }, {})
+        return o
+      }, {} as UrlParameters)
   }
   return null
 }
-function stripUrl(url) {
+function stripUrl(url: string) {
   const index = url.indexOf("?")
   if (index > 0) return url.slice(0, index)
   return url
 }
-async function handleRequest(req, res) {
+async function handleRequest(
+  req: InstanceType<typeof IncomingMessage>,
+  res: ServerResponse
+) {
   const { url, method } = req
   let result = site.get(url)
   if (result === undefined) {
@@ -147,7 +166,7 @@ async function handleRequest(req, res) {
   res.writeHead(statusCode, headers)
   res.end(data)
 }
-async function setup(workingDir) {
+async function setup(workingDir: string) {
   try {
     await access(workingDir, constants.F_OK)
   } catch (err) {
@@ -165,7 +184,7 @@ async function setup(workingDir) {
   await setupSiteFiles(workingDir)
   site.set("/", site.get(g_config.defaultFile))
 }
-async function setupSiteFiles(dir, url = "/") {
+async function setupSiteFiles(dir: string, url = "/") {
   await Promise.allSettled(
     readdirSync(dir).map(async file => {
       const path = join(dir, file)
@@ -178,18 +197,22 @@ async function setupSiteFiles(dir, url = "/") {
     })
   )
 }
-async function setupSiteFile(path, ext, url) {
+async function setupSiteFile(path: string, ext: string, url: string) {
   const plugin = g_config.plugins?.[ext]
   let file
   try {
     if (plugin) {
-      const { ext: newExt = ext, file: fileContent, skip } = await plugin(path)
-      if (skip) return
+      const {
+        newExtensionName: newExt = ext,
+        content: fileContent,
+        ignore,
+      } = await plugin(path)
+      if (ignore) return
       file = fileContent
       url = url.slice(0, -ext.length) + newExt
       ext = newExt
     } else if (ext === ".js") {
-      setSiteFile(url, "")
+      setSiteFile(url, Buffer.from(""))
       const urlObj = site.get(url)
       setCounter("inc")
       return impundler(path, { watch: g_config.watch }, str => {
@@ -257,7 +280,7 @@ const utf8ContentType = new Set([
   "application/x-httpd-php-script",
   "application/x-httpd-php-",
 ])
-function setSiteFile(url, data, headers = {}) {
+function setSiteFile(url: string, data: Buffer, headers = {}) {
   const contentType = getContentType(url)
   site.set(url, {
     header: {
@@ -270,6 +293,7 @@ function setSiteFile(url, data, headers = {}) {
   if (basename(url) === "index.html") {
     const dirUrl = joinUrl(url, "..")
     site.set(dirUrl, site.get(url))
+    site.set(dirUrl + ".html", site.get(url))
     if (dirUrl === g_config.defaultFile) site.set("/", site.get(url))
   }
   if (url === g_config.defaultFile) site.set("/", site.get(url))
@@ -281,13 +305,13 @@ __socket.addEventListener('open', function (event) {
 __socket.addEventListener('message', function (event) {
     if(event.data === 'reload') window.location.reload();
 });`
-function handleHtmlFile(data, url) {
-  data = validateLinks(data.toString(), url)
+function handleHtmlFile(data: Buffer, url: string) {
+  let dataStr = validateLinks(data.toString(), url)
   if (g_config.watch)
-    data = data.replace("</body>", "<script>" + cws + "</script>")
-  return data
+    dataStr = dataStr.replace("</body>", "<script>" + cws + "</script>")
+  return Buffer.from(dataStr)
 }
-function getContentType(path) {
+function getContentType(path: string) {
   switch (extname(path)) {
     case ".html":
       return "text/html"
@@ -309,7 +333,6 @@ function getContentType(path) {
       return "text/plain"
   }
 }
-
 function watchStructure() {
   const wsServer = new webSocketServer({ httpServer })
   wsServer.on("request", request => {
@@ -337,7 +360,7 @@ function watchStructure() {
     }, 300)
   )
 }
-function joinUrl(...args) {
+function joinUrl(...args: string[]) {
   return (
     "/" +
     args
@@ -356,8 +379,7 @@ function joinUrl(...args) {
       .join("/")
   )
 }
-
-function validateLinks(data, baseUrl) {
+function validateLinks(data: string, baseUrl: string) {
   const url = baseUrl.split("/").slice(0, -1).join("/")
   return data.replaceAll(
     /(href|src)="\.([^"]+)"/g,
@@ -372,7 +394,7 @@ async function initApi() {
     console.log("couldn't read api")
   }
 }
-async function setApiFolder(dir, pre = "/") {
+async function setApiFolder(dir: string, pre = "/") {
   await Promise.allSettled(
     readdirSync(dir).map(async file => {
       const path = join(dir, file)
@@ -383,9 +405,12 @@ async function setApiFolder(dir, pre = "/") {
     })
   )
 }
-async function addApi(path, pre) {
-  const oApi = (await import("file:///" + path)).default
-  each(oApi, (f, name) => {
+async function addApi(path: string, pre: string) {
+  const oApi = require(path)
+  for (const name in oApi) {
+    const f = oApi[name]
     api.set(pre + name, f)
-  })
+  }
 }
+
+startServer()

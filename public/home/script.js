@@ -1,3 +1,3 @@
 import { greeting } from "./module"
 
-document.getElementById("h1").innerHTML = "says:" + greeting()
+document.getElementById("h1").innerHTML = "says: " + greeting("visitor")
