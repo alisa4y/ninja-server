@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>login</title>
+  </head>
+  <body>
+    <form>
+      <fieldset>
+        <legend>login:</legend>
+        <div>
+          <label for="username">username</label>
+          <input id="username" type="text" data-key="username" />
+        </div>
+        <div>
+          <label for="password">password</label>
+          <input id="password" type="password" data-key="password" />
+        </div>
+        <button type="button" id="post">login</button>
+        <button type="button" id="get">login with GET method</button>
+      </fieldset>
+    </form>
+    <div id="message"></div>
+    <script>
+      const usernameInp = document.getElementById("username")
+      const passwordInp = document.getElementById("password")
+      const messageElm = document.getElementById("message")
+      const btnElm = document.querySelector("button#post")
+      const btnGet = document.querySelector("button#get")
+      btnElm.addEventListener("click", e => {
+        fetch("/api/login", {
+          method: "POST",
+          body: JSON.stringify({
+            username: usernameInp.value,
+            password: passwordInp.value,
+          }),
+        })
+          .then(r => r.json())
+          .then(({ message, token }) => {
+            messageElm.textContent = message
+            if (token) {
+              const d = new Date()
+              d.setTime(Date.now() + 3600)
+              document.cookie = `token=${token}; expires=${d.toUTCString()}; path=/;`
+            }
+          })
+      })
+      btnGet.addEventListener("click", e => {
+        fetch(
+          `/api/login?username=${usernameInp.value}&password=${passwordInp.value}`
+        )
+          .then(r => r.json())
+          .then(({ message, token }) => {
+            messageElm.textContent = message
+            if (token) {
+              const d = new Date()
+              d.setTime(Date.now() + 3600)
+              document.cookie = `token=${token}; expires=${d.toUTCString()}; path=/;`
+            }
+          })
+      })
+    </script>
+  </body>
+</html>

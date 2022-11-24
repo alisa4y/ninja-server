@@ -1,4 +1,27 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.startServer = void 0;
 const fs_1 = require("fs");
@@ -8,6 +31,7 @@ const websocket_1 = require("websocket");
 const flowco_1 = require("flowco");
 const path_1 = require("path");
 const js_bundler_1 = require("js-bundler");
+const Url = __importStar(require("url"));
 // import { minify } from "html-minifier-terser"
 let g_config;
 const configFileName = "server.config.js";
@@ -16,6 +40,7 @@ try {
     g_config = require(projectConfigFilePath);
 }
 catch (e) {
+    console.warn(e);
     const configFilePath = (0, path_1.join)(__dirname, "..", configFileName);
     const configFile = (0, fs_1.readFileSync)(configFilePath, "utf8");
     (0, fs_1.writeFileSync)(projectConfigFilePath, configFile);
@@ -68,36 +93,17 @@ function getBody(req) {
             body += chunk;
         });
         req.on("end", () => {
-            res(JSON.parse(body));
+            try {
+                res(JSON.parse(body));
+            }
+            catch (e) {
+                res(body);
+            }
         });
         req.on("error", rej);
     });
 }
-function getUrlParams(url) {
-    const questionMarkIndex = url.indexOf("?");
-    if (questionMarkIndex > 0) {
-        return url
-            .slice(questionMarkIndex)
-            .split("&")
-            .reduce((o, str) => {
-            const [key, value] = str.split("=");
-            if (value.length > 0) {
-                if (o[key] === undefined)
-                    o[key] = value;
-                else if (Array.isArray(o[key])) {
-                    ;
-                    o[key].push(value);
-                }
-                else {
-                    const v = o[key];
-                    o[key] = [v, value];
-                }
-            }
-            return o;
-        }, {});
-    }
-    return null;
-}
+function getUrlParams(url) { }
 function stripUrl(url) {
     const index = url.indexOf("?");
     if (index > 0)
@@ -109,14 +115,21 @@ async function handleRequest(req, res) {
     let result = site.get(url);
     if (result === undefined) {
         let data;
+        let paramObj;
         const exParam = { req, headers: {}, statusCode: 200 };
-        if (bodyMethod.includes(method)) {
-            const paramObj = await getBody(req);
+        try {
+            if (bodyMethod.includes(method)) {
+                paramObj = await getBody(req);
+            }
+            else if (paramMethod.includes(method)) {
+                paramObj = Url.parse(url, true).query;
+            }
             data = await api.get(stripUrl(url))?.(paramObj, exParam);
         }
-        else if (paramMethod.includes(method)) {
-            const paramObj = getUrlParams(url);
-            data = await api.get(stripUrl(url))?.(paramObj, exParam);
+        catch (e) {
+            exParam.statusCode = 500;
+            console.log(e.message);
+            data = "something went wrong";
         }
         if (data === undefined) {
             result = site.get(g_config.notFound) || nf;

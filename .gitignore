@@ -1,6 +1,3 @@
 node_modules
-<<<<<<< HEAD
 package-lock.json
-=======
-package-lock.json
->>>>>>> 47cf487dd5fc467c1464dde63afa3900af12c34a
+dist

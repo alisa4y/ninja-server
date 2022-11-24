@@ -18,6 +18,8 @@ import { shield, cell, err } from "flowco"
 import { join, extname, dirname, basename } from "path"
 import { fileURLToPath } from "url"
 import { impundler } from "js-bundler"
+import * as Url from "url"
+
 // import { minify } from "html-minifier-terser"
 
 let g_config: {
@@ -43,6 +45,7 @@ const projectConfigFilePath = join(process.cwd(), configFileName)
 try {
   g_config = require(projectConfigFilePath)
 } catch (e) {
+  console.warn(e)
   const configFilePath = join(__dirname, "..", configFileName)
   const configFile = readFileSync(configFilePath, "utf8")
   writeFileSync(projectConfigFilePath, configFile)
@@ -98,34 +101,16 @@ function getBody(req: InstanceType<typeof IncomingMessage>) {
       body += chunk
     })
     req.on("end", () => {
-      res(JSON.parse(body))
+      try {
+        res(JSON.parse(body))
+      } catch (e) {
+        res(body)
+      }
     })
     req.on("error", rej)
   })
 }
-type UrlParameters = Record<string, string | Array<string>>
-function getUrlParams(url: string) {
-  const questionMarkIndex = url.indexOf("?")
-  if (questionMarkIndex > 0) {
-    return url
-      .slice(questionMarkIndex)
-      .split("&")
-      .reduce((o: UrlParameters, str: string) => {
-        const [key, value] = str.split("=")
-        if (value.length > 0) {
-          if (o[key] === undefined) o[key] = value
-          else if (Array.isArray(o[key])) {
-            ;(o[key] as string[]).push(value)
-          } else {
-            const v = o[key]
-            o[key] = [v as string, value]
-          }
-        }
-        return o
-      }, {} as UrlParameters)
-  }
-  return null
-}
+function getUrlParams(url: string) {}
 function stripUrl(url: string) {
   const index = url.indexOf("?")
   if (index > 0) return url.slice(0, index)
@@ -139,13 +124,19 @@ async function handleRequest(
   let result = site.get(url)
   if (result === undefined) {
     let data
+    let paramObj
     const exParam = { req, headers: {}, statusCode: 200 }
-    if (bodyMethod.includes(method)) {
-      const paramObj = await getBody(req)
+    try {
+      if (bodyMethod.includes(method)) {
+        paramObj = await getBody(req)
+      } else if (paramMethod.includes(method)) {
+        paramObj = Url.parse(url, true).query
+      }
       data = await api.get(stripUrl(url))?.(paramObj, exParam)
-    } else if (paramMethod.includes(method)) {
-      const paramObj = getUrlParams(url)
-      data = await api.get(stripUrl(url))?.(paramObj, exParam)
+    } catch (e) {
+      exParam.statusCode = 500
+      console.log(e.message)
+      data = "something went wrong"
     }
     if (data === undefined) {
       result = site.get(g_config.notFound) || nf

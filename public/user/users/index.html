@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>login</title>
+  </head>
+  <body>
+    <form>
+      <fieldset>
+        <legend>register user:</legend>
+        <div>
+          <label for="username">username</label>
+          <input id="username" type="text" data-key="username" />
+        </div>
+        <div>
+          <label for="password">password</label>
+          <input id="password" type="password" data-key="password" />
+        </div>
+        <button type="button" id="post">add user</button>
+      </fieldset>
+    </form>
+    <div id="message"></div>
+    <script>
+      const usernameInp = document.getElementById("username")
+      const passwordInp = document.getElementById("password")
+      const messageElm = document.getElementById("message")
+      const buttonElm = document.querySelector("form button#post")
+      buttonElm.addEventListener("click", e => {
+        e.preventDefault()
+        fetch("/api/add", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${
+              document.cookie
+                .split(";")
+                .map(c => c.trim())
+                .find(c => c.startsWith("token="))
+                ?.split("=")[1]
+            }`,
+          },
+          body: JSON.stringify({
+            username: usernameInp.value,
+            password: passwordInp.value,
+          }),
+        })
+          .then(r => r.json())
+          .then(({ message }) => {
+            messageElm.textContent = message
+          })
+      })
+    </script>
+  </body>
+</html>
