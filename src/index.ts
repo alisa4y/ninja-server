@@ -5,18 +5,13 @@ import {
   mkdirSync,
   constants,
   readdirSync,
+  FSWatcher,
 } from "fs"
 import { access, readFile } from "fs/promises"
-import {
-  createServer,
-  IncomingMessage,
-  RequestListener,
-  ServerResponse,
-} from "http"
+import { createServer, IncomingMessage, ServerResponse } from "http"
 import { connection, server as webSocketServer } from "websocket"
-import { shield, cell, err } from "flowco"
+import { shield, cell, err, ox } from "flowco"
 import { join, extname, dirname, basename } from "path"
-import { fileURLToPath } from "url"
 import { impundler } from "js-bundler"
 import * as Url from "url"
 
@@ -110,11 +105,15 @@ function getBody(req: InstanceType<typeof IncomingMessage>) {
     req.on("error", rej)
   })
 }
-function getUrlParams(url: string) {}
 function stripUrl(url: string) {
   const index = url.indexOf("?")
   if (index > 0) return url.slice(0, index)
   return url
+}
+export type XParam = {
+  req: IncomingMessage
+  headers: Record<string, any>
+  statusCode: number
 }
 async function handleRequest(
   req: InstanceType<typeof IncomingMessage>,
@@ -125,7 +124,7 @@ async function handleRequest(
   if (result === undefined) {
     let data
     let paramObj
-    const exParam = { req, headers: {}, statusCode: 200 }
+    const exParam: XParam = { req, headers: {}, statusCode: 200 }
     try {
       if (bodyMethod.includes(method)) {
         paramObj = await getBody(req)
@@ -188,6 +187,7 @@ async function setupSiteFiles(dir: string, url = "/") {
     })
   )
 }
+const jsWatchers: FSWatcher[] = []
 async function setupSiteFile(path: string, ext: string, url: string) {
   const plugin = g_config.plugins?.[ext]
   let file
@@ -206,10 +206,13 @@ async function setupSiteFile(path: string, ext: string, url: string) {
       setSiteFile(url, Buffer.from(""))
       const urlObj = site.get(url)
       setCounter("inc")
-      return impundler(path, { watch: g_config.watch }, str => {
+      impundler(path, { watch: g_config.watch }, str => {
         urlObj.data = str
         setCounter("dec")
+      }).then(ifile => {
+        jsWatchers.push(ifile.watcher)
       })
+      return
     } else file = await readFile(path)
 
     if (ext === ".html") setSiteFile(url, handleHtmlFile(file, url))
@@ -324,8 +327,9 @@ function getContentType(path: string) {
       return "text/plain"
   }
 }
+let wsServer: webSocketServer, watcher: FSWatcher
 function watchStructure() {
-  const wsServer = new webSocketServer({ httpServer })
+  wsServer = new webSocketServer({ httpServer })
   wsServer.on("request", request => {
     const con = request.accept()
     connections.add(con)
@@ -334,7 +338,7 @@ function watchStructure() {
     })
   })
   const isReloadExtRgx = g_config.reloadExtRgx
-  const w = watch(
+  watcher = watch(
     workingDir,
     { recursive: true },
     shield(async (eventType, filename) => {
@@ -405,3 +409,15 @@ async function addApi(path: string, pre: string) {
 }
 
 startServer()
+
+function terminate() {
+  console.log("terminating...")
+  watcher.close()
+  wsServer.closeAllConnections()
+  httpServer.close()
+  jsWatchers.forEach(f => f.close())
+}
+
+process.on("SIGINT", () => process.exit())
+process.on("SIGTERM", () => process.exit())
+process.on("exit", terminate)

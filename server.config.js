@@ -7,5 +7,5 @@ module.exports = {
   watch: true,
   skipExtensions: [], // skip watching files with these extensions
   reloadExtRgx: /^(?:(?!\.css).)+$/, // server won't send reload signal for css files
-  plugins: {}, // { [extension] : (fileContent) => ({ext: <newExtension>, file: <newFileContent>, skip: <booloan>}) }
+  plugins: {}, // { [extension] : (fileContent) => ({newExtension:string, content:string, ignore: booloan}) }
 }

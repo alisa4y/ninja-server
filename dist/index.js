@@ -103,7 +103,6 @@ function getBody(req) {
         req.on("error", rej);
     });
 }
-function getUrlParams(url) { }
 function stripUrl(url) {
     const index = url.indexOf("?");
     if (index > 0)
@@ -181,6 +180,7 @@ async function setupSiteFiles(dir, url = "/") {
         }
     }));
 }
+const jsWatchers = [];
 async function setupSiteFile(path, ext, url) {
     const plugin = g_config.plugins?.[ext];
     let file;
@@ -197,10 +197,13 @@ async function setupSiteFile(path, ext, url) {
             setSiteFile(url, Buffer.from(""));
             const urlObj = site.get(url);
             setCounter("inc");
-            return (0, js_bundler_1.impundler)(path, { watch: g_config.watch }, str => {
+            (0, js_bundler_1.impundler)(path, { watch: g_config.watch }, str => {
                 urlObj.data = str;
                 setCounter("dec");
+            }).then(ifile => {
+                jsWatchers.push(ifile.watcher);
             });
+            return;
         }
         else
             file = await (0, promises_1.readFile)(path);
@@ -321,8 +324,9 @@ function getContentType(path) {
             return "text/plain";
     }
 }
+let wsServer, watcher;
 function watchStructure() {
-    const wsServer = new websocket_1.server({ httpServer });
+    wsServer = new websocket_1.server({ httpServer });
     wsServer.on("request", request => {
         const con = request.accept();
         connections.add(con);
@@ -331,7 +335,7 @@ function watchStructure() {
         });
     });
     const isReloadExtRgx = g_config.reloadExtRgx;
-    const w = (0, fs_1.watch)(workingDir, { recursive: true }, (0, flowco_1.shield)(async (eventType, filename) => {
+    watcher = (0, fs_1.watch)(workingDir, { recursive: true }, (0, flowco_1.shield)(async (eventType, filename) => {
         const ext = (0, path_1.extname)(filename);
         if (eventType === "change" && ext !== "") {
             const isLoad = isReloadExtRgx?.test(ext);
@@ -392,3 +396,13 @@ async function addApi(path, pre) {
     }
 }
 startServer();
+function terminate() {
+    console.log("terminating...");
+    watcher.close();
+    wsServer.closeAllConnections();
+    httpServer.close();
+    jsWatchers.forEach(f => f.close());
+}
+process.on("SIGINT", () => process.exit());
+process.on("SIGTERM", () => process.exit());
+process.on("exit", terminate);
