@@ -7,13 +7,14 @@ import {
   readdirSync,
   FSWatcher,
 } from "fs"
-import { access, readFile } from "fs/promises"
+import { access, readFile, mkdir, writeFile } from "fs/promises"
 import { createServer, IncomingMessage, ServerResponse } from "http"
 import { connection, server as webSocketServer } from "websocket"
-import { shield, cell, err, ox } from "flowco"
-import { join, extname, dirname, basename } from "path"
+import { shield, cell } from "flowco"
+import { join, extname, basename } from "path"
 import { impundler } from "js-bundler"
 import * as Url from "url"
+import { register } from "ts-node"
 
 // import { minify } from "html-minifier-terser"
 
@@ -23,6 +24,7 @@ let g_config: {
   port: number
   publicDir: string
   watch: boolean
+  apiExtension: string
   notFound: string
   reloadExtRgx?: RegExp
   skipExtensions?: string[]
@@ -202,7 +204,7 @@ async function setupSiteFile(path: string, ext: string, url: string) {
       file = fileContent
       url = url.slice(0, -ext.length) + newExt
       ext = newExt
-    } else if (ext === ".js") {
+    } else if (ext === ".js" || ext === ".ts") {
       setSiteFile(url, Buffer.from(""))
       const urlObj = site.get(url)
       setCounter("inc")
@@ -381,22 +383,43 @@ function validateLinks(data: string, baseUrl: string) {
     (m, p1, p2) => `${p1}="${joinUrl(url, p2)}"`
   )
 }
+const apiFolderPath = join(process.cwd(), "./api")
 async function initApi() {
-  const apiFolder = join(process.cwd(), "./api")
   try {
-    await setApiFolder(apiFolder)
+    await access(apiFolderPath)
+    await setApiFolder(apiFolderPath)
   } catch (e) {
-    console.log("couldn't read api")
+    console.log("there is no api folder")
   }
 }
+const clientApiFolderPath = join(process.cwd(), "./clientApi")
+const apiExt = g_config.apiExtension
+if (apiExt === ".ts") register({ typeCheck: false })
+
+const apiWatchers: FSWatcher[] = []
 async function setApiFolder(dir: string, pre = "/") {
+  try {
+    await access(clientApiFolderPath)
+  } catch (e) {
+    await mkdir(clientApiFolderPath)
+  }
   await Promise.allSettled(
     readdirSync(dir).map(async file => {
       const path = join(dir, file)
       const ext = extname(file)
-      if (ext === "") await setApiFolder(path, pre + file + "/")
-      else if (ext === ".js") addApi(path, pre + file.slice(0, -3) + "/")
-      else err("unhandled extension for Api")
+      if (ext === apiExt) {
+        addApi(path, pre + file.slice(0, -3) + "/")
+        genFile(path)
+        if (g_config.watch)
+          apiWatchers.push(
+            watch(
+              path,
+              shield(eventType => {
+                if (eventType === "change") genFile(path)
+              }, 300)
+            )
+          )
+      } else if (ext === "") await setApiFolder(path, pre + file + "/")
     })
   )
 }
@@ -407,6 +430,70 @@ async function addApi(path: string, pre: string) {
     api.set(pre + name, f)
   }
 }
+async function genFile(filePath: string) {
+  let ret
+  switch (extname(filePath)) {
+    case ".js":
+      ret = await generateClientApiFileJS(filePath)
+      break
+    case ".ts":
+      ret = await generateClientApiFileTS(filePath)
+      break
+  }
+  await writeFile(
+    join(
+      clientApiFolderPath,
+      filePath.slice(apiFolderPath.length, -3) + apiExt
+    ),
+    ret
+  )
+}
+async function generateClientApiFileJS(filePath: string) {
+  const oApi = require(filePath)
+  return `module.exports = {
+    ${Object.keys(oApi)
+      .map(
+        name => `${name}: (data, options={}) => {
+      return fetch("${filePath.slice(0, -3)}", {
+        method: "POST",
+        body: JSON.stringify(data),
+        ...options
+      })
+    }`
+      )
+      .join()}
+  }`
+}
+
+async function generateClientApiFileTS(filePath: string) {
+  const oApi = require(filePath)
+  const oApiPath = filePath
+    .slice(apiFolderPath.length, -3)
+    .replaceAll("\\", "/")
+
+  return `import * as __oApi from "../api${oApiPath}"\n
+    ${Object.keys(oApi)
+      .filter(name => name !== "__esModule")
+      .map(
+        name => `export function ${name} (data:Parameters<typeof __oApi.${name}>[0], options:RequestInit={}) {
+  type ObjRetType = Extract<Awaited<ReturnType<typeof __oApi.${name}>>, Record<any, any>>
+  type RetType =  ObjRetType extends never 
+    ? Omit<Response, "json"> & {
+      json: () => Promise<never>
+    }
+    : Omit<Response, "json"> & {
+        json: () => Promise<ObjRetType>
+      }
+  return fetch("${oApiPath}/${name}", {
+    method: "POST",
+    body: JSON.stringify(data),
+    ...options
+  }) as Promise<RetType>
+}`
+      )
+      .join("\n")}
+  `
+}
 
 startServer()
 
@@ -415,7 +502,8 @@ function terminate() {
   watcher.close()
   wsServer.closeAllConnections()
   httpServer.close()
-  jsWatchers.forEach(f => f.close())
+  jsWatchers.forEach(w => w.close())
+  apiWatchers.forEach(w => w.close())
 }
 
 process.on("SIGINT", () => process.exit())

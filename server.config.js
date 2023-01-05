@@ -5,6 +5,7 @@ module.exports = {
   publicDir: "public",
   defaultFile: "home",
   watch: true,
+  apiExtension: ".ts", // .ts .js
   skipExtensions: [], // skip watching files with these extensions
   reloadExtRgx: /^(?:(?!\.css).)+$/, // server won't send reload signal for css files
   plugins: {}, // { [extension] : (fileContent) => ({newExtension:string, content:string, ignore: booloan}) }

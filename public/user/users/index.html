@@ -22,34 +22,6 @@
       </fieldset>
     </form>
     <div id="message"></div>
-    <script>
-      const usernameInp = document.getElementById("username")
-      const passwordInp = document.getElementById("password")
-      const messageElm = document.getElementById("message")
-      const buttonElm = document.querySelector("form button#post")
-      buttonElm.addEventListener("click", e => {
-        e.preventDefault()
-        fetch("/api/add", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${
-              document.cookie
-                .split(";")
-                .map(c => c.trim())
-                .find(c => c.startsWith("token="))
-                ?.split("=")[1]
-            }`,
-          },
-          body: JSON.stringify({
-            username: usernameInp.value,
-            password: passwordInp.value,
-          }),
-        })
-          .then(r => r.json())
-          .then(({ message }) => {
-            messageElm.textContent = message
-          })
-      })
-    </script>
+    <script src="./index.ts"></script>
   </body>
 </html>

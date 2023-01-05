@@ -32,6 +32,7 @@ const flowco_1 = require("flowco");
 const path_1 = require("path");
 const js_bundler_1 = require("js-bundler");
 const Url = __importStar(require("url"));
+const ts_node_1 = require("ts-node");
 // import { minify } from "html-minifier-terser"
 let g_config;
 const configFileName = "server.config.js";
@@ -193,7 +194,7 @@ async function setupSiteFile(path, ext, url) {
             url = url.slice(0, -ext.length) + newExt;
             ext = newExt;
         }
-        else if (ext === ".js") {
+        else if (ext === ".js" || ext === ".ts") {
             setSiteFile(url, Buffer.from(""));
             const urlObj = site.get(url);
             setCounter("inc");
@@ -367,25 +368,42 @@ function validateLinks(data, baseUrl) {
     const url = baseUrl.split("/").slice(0, -1).join("/");
     return data.replaceAll(/(href|src)="\.([^"]+)"/g, (m, p1, p2) => `${p1}="${joinUrl(url, p2)}"`);
 }
+const apiFolderPath = (0, path_1.join)(process.cwd(), "./api");
 async function initApi() {
-    const apiFolder = (0, path_1.join)(process.cwd(), "./api");
     try {
-        await setApiFolder(apiFolder);
+        await (0, promises_1.access)(apiFolderPath);
+        await setApiFolder(apiFolderPath);
     }
     catch (e) {
-        console.log("couldn't read api");
+        console.log("there is no api folder");
     }
 }
+const clientApiFolderPath = (0, path_1.join)(process.cwd(), "./clientApi");
+const apiExt = g_config.apiExtension;
+if (apiExt === ".ts")
+    (0, ts_node_1.register)({ typeCheck: false });
+const apiWatchers = [];
 async function setApiFolder(dir, pre = "/") {
+    try {
+        await (0, promises_1.access)(clientApiFolderPath);
+    }
+    catch (e) {
+        await (0, promises_1.mkdir)(clientApiFolderPath);
+    }
     await Promise.allSettled((0, fs_1.readdirSync)(dir).map(async (file) => {
         const path = (0, path_1.join)(dir, file);
         const ext = (0, path_1.extname)(file);
-        if (ext === "")
-            await setApiFolder(path, pre + file + "/");
-        else if (ext === ".js")
+        if (ext === apiExt) {
             addApi(path, pre + file.slice(0, -3) + "/");
-        else
-            (0, flowco_1.err)("unhandled extension for Api");
+            genFile(path);
+            if (g_config.watch)
+                apiWatchers.push((0, fs_1.watch)(path, (0, flowco_1.shield)(eventType => {
+                    if (eventType === "change")
+                        genFile(path);
+                }, 300)));
+        }
+        else if (ext === "")
+            await setApiFolder(path, pre + file + "/");
     }));
 }
 async function addApi(path, pre) {
@@ -395,13 +413,66 @@ async function addApi(path, pre) {
         api.set(pre + name, f);
     }
 }
+async function genFile(filePath) {
+    let ret;
+    switch ((0, path_1.extname)(filePath)) {
+        case ".js":
+            ret = await generateClientApiFileJS(filePath);
+            break;
+        case ".ts":
+            ret = await generateClientApiFileTS(filePath);
+            break;
+    }
+    await (0, promises_1.writeFile)((0, path_1.join)(clientApiFolderPath, filePath.slice(apiFolderPath.length, -3) + apiExt), ret);
+}
+async function generateClientApiFileJS(filePath) {
+    const oApi = require(filePath);
+    return `module.exports = {
+    ${Object.keys(oApi)
+        .map(name => `${name}: (data, options={}) => {
+      return fetch("${filePath.slice(0, -3)}", {
+        method: "POST",
+        body: JSON.stringify(data),
+        ...options
+      })
+    }`)
+        .join()}
+  }`;
+}
+async function generateClientApiFileTS(filePath) {
+    const oApi = require(filePath);
+    const oApiPath = filePath
+        .slice(apiFolderPath.length, -3)
+        .replaceAll("\\", "/");
+    return `import * as __oApi from "../api${oApiPath}"\n
+    ${Object.keys(oApi)
+        .filter(name => name !== "__esModule")
+        .map(name => `export function ${name} (data:Parameters<typeof __oApi.${name}>[0], options:RequestInit={}) {
+  type ObjRetType = Extract<Awaited<ReturnType<typeof __oApi.${name}>>, Record<any, any>>
+  type RetType =  ObjRetType extends never 
+    ? Omit<Response, "json"> & {
+      json: () => Promise<never>
+    }
+    : Omit<Response, "json"> & {
+        json: () => Promise<ObjRetType>
+      }
+  return fetch("${oApiPath}/${name}", {
+    method: "POST",
+    body: JSON.stringify(data),
+    ...options
+  }) as Promise<RetType>
+}`)
+        .join("\n")}
+  `;
+}
 startServer();
 function terminate() {
     console.log("terminating...");
     watcher.close();
     wsServer.closeAllConnections();
     httpServer.close();
-    jsWatchers.forEach(f => f.close());
+    jsWatchers.forEach(w => w.close());
+    apiWatchers.forEach(w => w.close());
 }
 process.on("SIGINT", () => process.exit());
 process.on("SIGTERM", () => process.exit());

@@ -35,7 +35,7 @@ describe("server structure", () => {
     cy.get("form button#post").contains("add user")
   })
 })
-describe("can takes api folder and create api simply", () => {
+describe("can takes api folder and create api and also linking straight forwardly to typescript file", () => {
   it("simple usecase when trying to do an unauthenticated action", () => {
     cy.visit("localhost:3000/user/users")
     cy.get("form #username").type("grand_art")
