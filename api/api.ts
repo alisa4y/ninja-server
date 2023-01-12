@@ -8,7 +8,7 @@ type User = {
   auth: "admin" | "standard"
 }
 
-const users: User[] = [
+let users: User[] = [
   {
     username: "ali",
     password: "1111",
@@ -20,7 +20,10 @@ const users: User[] = [
     auth: "standard",
   },
 ]
-
+const init = JSON.stringify(users)
+export function reset() {
+  users = JSON.parse(init)
+}
 export function login({ username, password }: Omit<User, "auth">): {
   token?: string
   message: string
@@ -70,4 +73,7 @@ export const add = ({ username, password, auth }: User, x: XParam) => {
       message: "not authorized",
     }
   }
+}
+export function greet() {
+  return "hi"
 }

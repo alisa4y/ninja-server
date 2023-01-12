@@ -10,11 +10,12 @@ import {
 import { access, readFile, mkdir, writeFile } from "fs/promises"
 import { createServer, IncomingMessage, ServerResponse } from "http"
 import { connection, server as webSocketServer } from "websocket"
-import { shield, cell } from "flowco"
+import { shield, cell, debounce, timeout } from "flowco"
 import { join, extname, basename } from "path"
-import { impundler } from "js-bundler"
+import { closeAllBundles, impundler } from "js_bundler"
 import * as Url from "url"
-import { register } from "ts-node"
+import ts from "typescript"
+import { transpileJSX } from "jsx_transpiler"
 
 // import { minify } from "html-minifier-terser"
 
@@ -48,9 +49,11 @@ try {
   writeFileSync(projectConfigFilePath, configFile)
   g_config = require(projectConfigFilePath)
 }
+const apiExt = g_config.apiExtension
 g_config.defaultFile = joinUrl(g_config.defaultFile || "index.html")
 
-const site = new Map()
+type WebPageI = { headers: any; data: Buffer }
+const site: Map<string, WebPageI> = new Map()
 const api = new Map()
 
 let httpServer: ReturnType<typeof createServer>
@@ -61,7 +64,8 @@ const workingDir = join(process.cwd(), g_config.publicDir)
 
 // -------------------------------  watch variables  -------------------------------
 const connections: Set<connection> = new Set()
-const setCounter = cell((counter, action) => {
+
+const setCounter = cell((counter: number, action: "inc" | "dec") => {
   let v = counter
   switch (action) {
     case "inc":
@@ -69,9 +73,9 @@ const setCounter = cell((counter, action) => {
       break
     case "dec":
       v !== 0 && v--
+      v === 0 && connections.forEach(c => c.sendUTF("reload"))
       break
   }
-  v === 0 && connections.forEach(c => c.sendUTF("reload"))
   return v
 }, 0)
 export async function startServer() {
@@ -79,6 +83,7 @@ export async function startServer() {
 
   httpServer = createServer(handleRequest)
   httpServer.listen(port, host).on("listening", () => {
+    console.clear()
     console.log(`Server running at ${uri}/`)
   })
   if (g_config.watch) watchStructure()
@@ -122,7 +127,7 @@ async function handleRequest(
   res: ServerResponse
 ) {
   const { url, method } = req
-  let result = site.get(url)
+  let result: any = site.get(url)
   if (result === undefined) {
     let data
     let paramObj
@@ -176,20 +181,22 @@ async function setup(workingDir: string) {
   await setupSiteFiles(workingDir)
   site.set("/", site.get(g_config.defaultFile))
 }
-async function setupSiteFiles(dir: string, url = "/") {
-  await Promise.allSettled(
-    readdirSync(dir).map(async file => {
+function setupSiteFiles(dir: string, url = "/"): Promise<any> {
+  return Promise.allSettled(
+    readdirSync(dir).map(file => {
       const path = join(dir, file)
       const ext = extname(file)
       const fileUrl = joinUrl(url, file)
-      if (ext === "") await setupSiteFiles(path, fileUrl)
+      if (ext === "") return setupSiteFiles(path, fileUrl)
       else if (!g_config.skipExtensions?.includes(ext)) {
-        await setupSiteFile(path, ext, fileUrl)
+        return setupSiteFile(path, ext, fileUrl)
       }
     })
   )
 }
+type Fn = (...args: any[]) => string
 const jsWatchers: FSWatcher[] = []
+const impundledFiles: Set<string> = new Set()
 async function setupSiteFile(path: string, ext: string, url: string) {
   const plugin = g_config.plugins?.[ext]
   let file
@@ -207,92 +214,85 @@ async function setupSiteFile(path: string, ext: string, url: string) {
     } else if (ext === ".js" || ext === ".ts") {
       setSiteFile(url, Buffer.from(""))
       const urlObj = site.get(url)
+      impundledFiles.add(path)
       setCounter("inc")
-      impundler(path, { watch: g_config.watch }, str => {
-        urlObj.data = str
+      return await impundler(path, { watch: g_config.watch }, async str => {
+        urlObj.data = Buffer.from(str)
         setCounter("dec")
-      }).then(ifile => {
-        jsWatchers.push(ifile.watcher)
       })
-      return
+    } else if (ext === ".jsx" || ext === ".tsx") {
+      return handleJSX(path, url)
     } else file = await readFile(path)
-
-    if (ext === ".html") setSiteFile(url, handleHtmlFile(file, url))
+    if (ext === ".html")
+      setSiteFile(url, Buffer.from(handleHtmlFile(file, url)))
     else setSiteFile(url, file)
   } catch (e) {
     console.log(e)
   }
 }
-const utf8ContentType = new Set([
-  "text/html",
-  "application/xhtml+xml",
-  "application/xml",
-  "text/xml",
-  "text/plain",
-  "text/css",
-  "application/json",
-  "application/javascript",
-  "application/ecmascript",
-  "application/x-ecmascript",
-  "application/x-javascript",
-  "text/javascript",
-  "text/ecmascript",
-  "application/x-httpd-php",
-  "application/x-httpd-php-source",
-  "application/x-httpd-php3",
-  "application/x-httpd-php4",
-  "application/x-httpd-php5",
-  "application/x-httpd-php-source",
-  "application/x-httpd-php-script",
-  "application/x-httpd-php-code",
-  "application/x-httpd-php-code",
-  "application/x-httpd-php-source",
-  "application/x-httpd-php-src",
-  "application/x-httpd-php-script",
-  "application/x-httpd-php-code",
-  "application/x-httpd-php-code",
-  "application/x-httpd-php-source",
-  "application/x-httpd-php-src",
-  "application/x-httpd-php-script",
-  "application/x-httpd-php-code",
-  "application/x-httpd-php-code",
-  "application/x-httpd-php-source",
-  "application/x-httpd-php-src",
-  "application/x-httpd-php-script",
-  "application/x-httpd-php-code",
-  "application/x-httpd-php-code",
-  "application/x-httpd-php-source",
-  "application/x-httpd-php-src",
-  "application/x-httpd-php-script",
-  "application/x-httpd-php-code",
-  "application/x-httpd-php-code",
-  "application/x-httpd-php-source",
-  "application/x-httpd-php-src",
-  "application/x-httpd-php-script",
-  "application/x-httpd-php-code",
-  "application/x-httpd-php-code",
-  "application/x-httpd-php-source",
-  "application/x-httpd-php-src",
-  "application/x-httpd-php-script",
-  "application/x-httpd-php-",
-])
+const jsxPlugin = {
+  ".jsx": (code: string) => transpileJSX(code),
+  ".tsx": (code: string) =>
+    transpileJSX(
+      ts.transpile(code, {
+        module: ts.ModuleKind.Node16,
+        removeComments: true,
+        jsx: ts.JsxEmit.Preserve,
+      })
+    ),
+}
+function handleJSX(filePath: string, url: string) {
+  url = url.slice(0, -4) + ".html"
+  impundledFiles.add(filePath)
+  setCounter("inc")
+  impundler(
+    filePath,
+    { watch: g_config.watch, plugins: jsxPlugin },
+    async (result, bundle) => {
+      const { index }: { index: Fn } = eval(result)
+      if (index === undefined) {
+        return bundle.unhandle()
+      }
+      if (index.length === 0) {
+        let file = Buffer.from("<!DOCTYPE html>" + index())
+        setSiteFile(url, Buffer.from(handleHtmlFile(file, url)))
+      } else {
+        const toHtml = (params: any, x: any) => {
+          x.headers = {
+            "Content-Type": "text/html",
+          }
+          return handleHtmlFile(
+            Buffer.from("<!DOCTYPE html>" + index(params, x)),
+            url
+          )
+        }
+        api.set(url, toHtml)
+        handleIndexHtml(url, toHtml, api)
+      }
+      setCounter("dec")
+    }
+  )
+}
 function setSiteFile(url: string, data: Buffer, headers = {}) {
   const contentType = getContentType(url)
   site.set(url, {
-    header: {
+    headers: {
       "Content-Type": contentType,
       // "Content-Length": data.length,
       ...headers,
     },
     data,
   })
+  handleIndexHtml(url, site.get(url), site)
+}
+function handleIndexHtml(url: string, value: any, source: Map<string, any>) {
   if (basename(url) === "index.html") {
     const dirUrl = joinUrl(url, "..")
-    site.set(dirUrl, site.get(url))
-    site.set(dirUrl + ".html", site.get(url))
-    if (dirUrl === g_config.defaultFile) site.set("/", site.get(url))
+    source.set(dirUrl, value)
+    source.set(dirUrl + ".html", value)
+    if (dirUrl === g_config.defaultFile) source.set("/", value)
   }
-  if (url === g_config.defaultFile) site.set("/", site.get(url))
+  if (url === g_config.defaultFile) source.set("/", value)
 }
 const cws = `const __socket = new WebSocket('ws://${host}:${port}');
 __socket.addEventListener('open', function (event) {
@@ -305,7 +305,7 @@ function handleHtmlFile(data: Buffer, url: string) {
   let dataStr = validateLinks(data.toString(), url)
   if (g_config.watch)
     dataStr = dataStr.replace("</body>", "<script>" + cws + "</script>")
-  return Buffer.from(dataStr)
+  return dataStr
 }
 function getContentType(path: string) {
   switch (extname(path)) {
@@ -329,7 +329,7 @@ function getContentType(path: string) {
       return "text/plain"
   }
 }
-let wsServer: webSocketServer, watcher: FSWatcher
+let wsServer: webSocketServer
 function watchStructure() {
   wsServer = new webSocketServer({ httpServer })
   wsServer.on("request", request => {
@@ -340,22 +340,30 @@ function watchStructure() {
     })
   })
   const isReloadExtRgx = g_config.reloadExtRgx
-  watcher = watch(
+  const handledFiles: Set<string> = new Set()
+  const watcher = watch(
     workingDir,
     { recursive: true },
-    shield(async (eventType, filename) => {
+    async (eventType, filename) => {
+      if (handledFiles.has(filename)) return
+      handledFiles.add(filename)
+      setTimeout(() => {
+        handledFiles.clear()
+      }, 300)
       const ext = extname(filename)
       if (eventType === "change" && ext !== "") {
         const isLoad = isReloadExtRgx?.test(ext)
-        isLoad && setCounter("inc")
-        if (ext !== ".js") {
+        const filePath = join(workingDir, filename)
+        if (!impundledFiles.has(filePath)) {
+          isLoad && setCounter("inc")
           const url = joinUrl(filename)
-          await setupSiteFile(join(workingDir, filename), ext, url)
+          await setupSiteFile(filePath, ext, url)
           isLoad && setCounter("dec")
         }
       }
-    }, 300)
+    }
   )
+  jsWatchers.push(watcher)
 }
 function joinUrl(...args: string[]) {
   return (
@@ -387,16 +395,18 @@ const apiFolderPath = join(process.cwd(), "./api")
 async function initApi() {
   try {
     await access(apiFolderPath)
+  } catch (e) {
+    return console.log("there is no api folder")
+  }
+  try {
     await setApiFolder(apiFolderPath)
   } catch (e) {
-    console.log("there is no api folder")
+    if (g_config.watch) {
+      console.log(e)
+    } else throw e
   }
 }
 const clientApiFolderPath = join(process.cwd(), "./clientApi")
-const apiExt = g_config.apiExtension
-if (apiExt === ".ts") register({ typeCheck: false })
-
-const apiWatchers: FSWatcher[] = []
 async function setApiFolder(dir: string, pre = "/") {
   try {
     await access(clientApiFolderPath)
@@ -408,36 +418,29 @@ async function setApiFolder(dir: string, pre = "/") {
       const path = join(dir, file)
       const ext = extname(file)
       if (ext === apiExt) {
-        addApi(path, pre + file.slice(0, -3) + "/")
-        genFile(path)
-        if (g_config.watch)
-          apiWatchers.push(
-            watch(
-              path,
-              shield(eventType => {
-                if (eventType === "change") genFile(path)
-              }, 300)
-            )
-          )
-      } else if (ext === "") await setApiFolder(path, pre + file + "/")
+        return setApi(path, pre + file.slice(0, -3) + "/")
+      } else if (ext === "") return setApiFolder(path, pre + file + "/")
     })
   )
 }
-async function addApi(path: string, pre: string) {
-  const oApi = require(path)
-  for (const name in oApi) {
-    const f = oApi[name]
-    api.set(pre + name, f)
-  }
+function setApi(path: string, pre: string) {
+  impundledFiles.add(path)
+  return impundler(path, { watch: g_config.watch }, async code => {
+    setCounter("inc")
+    const oApi = eval(code)
+    for (const name in oApi) api.set(pre + name, oApi[name])
+    await genFile(path, oApi)
+    setCounter("dec")
+  })
 }
-async function genFile(filePath: string) {
+async function genFile(filePath: string, api: Record<string, any>) {
   let ret
   switch (extname(filePath)) {
     case ".js":
-      ret = await generateClientApiFileJS(filePath)
+      ret = await generateClientApiFileJS(filePath, api)
       break
     case ".ts":
-      ret = await generateClientApiFileTS(filePath)
+      ret = await generateClientApiFileTS(filePath, api)
       break
   }
   await writeFile(
@@ -448,10 +451,12 @@ async function genFile(filePath: string) {
     ret
   )
 }
-async function generateClientApiFileJS(filePath: string) {
-  const oApi = require(filePath)
+async function generateClientApiFileJS(
+  filePath: string,
+  api: Record<string, any>
+) {
   return `module.exports = {
-    ${Object.keys(oApi)
+    ${Object.keys(api)
       .map(
         name => `${name}: (data, options={}) => {
       return fetch("${filePath.slice(0, -3)}", {
@@ -465,14 +470,14 @@ async function generateClientApiFileJS(filePath: string) {
   }`
 }
 
-async function generateClientApiFileTS(filePath: string) {
-  const oApi = require(filePath)
-  const oApiPath = filePath
-    .slice(apiFolderPath.length, -3)
-    .replaceAll("\\", "/")
+async function generateClientApiFileTS(
+  filePath: string,
+  api: Record<string, any>
+) {
+  const apiPath = filePath.slice(apiFolderPath.length, -3).replaceAll("\\", "/")
 
-  return `import * as __oApi from "../api${oApiPath}"\n
-    ${Object.keys(oApi)
+  return `import * as __oApi from "../api${apiPath}"\n
+    ${Object.keys(api)
       .filter(name => name !== "__esModule")
       .map(
         name => `export function ${name} (data:Parameters<typeof __oApi.${name}>[0], options:RequestInit={}) {
@@ -484,7 +489,7 @@ async function generateClientApiFileTS(filePath: string) {
     : Omit<Response, "json"> & {
         json: () => Promise<ObjRetType>
       }
-  return fetch("${oApiPath}/${name}", {
+  return fetch("${apiPath}/${name}", {
     method: "POST",
     body: JSON.stringify(data),
     ...options
@@ -499,11 +504,10 @@ startServer()
 
 function terminate() {
   console.log("terminating...")
-  watcher.close()
+  jsWatchers.forEach(w => w.close())
   wsServer.closeAllConnections()
   httpServer.close()
-  jsWatchers.forEach(w => w.close())
-  apiWatchers.forEach(w => w.close())
+  closeAllBundles()
 }
 
 process.on("SIGINT", () => process.exit())

@@ -5,8 +5,8 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc",
-    "build:watch": "tsc --watch",
+    "build": "tsc ./src/index.ts --outDir dist --declaration --module node16",
+    "build:watch": "tsc ./src/index.ts --outDir dist --declaration --module node16 --watch",
     "start": "node dist/index.js",
     "test": "npx cypress open",
     "cypress:open": "npx cypress open"
@@ -32,6 +32,7 @@
     "flowco": "file:../js-logic",
     "html-minifier-terser": "^7.0.0-alpha.2",
     "js_bundler": "file:../js-bundler",
+    "jsx_transpiler": "file:../jsx-transpiler",
     "terser": "^5.10.0",
     "ts-node": "^10.9.1",
     "typescript": "^4.9.4",
@@ -39,8 +40,9 @@
   },
   "devDependencies": {
     "@types/node": "^18.11.9",
+    "@types/react": "^18.0.26",
     "@types/websocket": "^1.0.5",
-    "cypress": "^11.0.1",
+    "cypress": "^11.2.0",
     "jsonwebtoken": "^9.0.0"
   }
 }

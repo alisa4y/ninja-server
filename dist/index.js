@@ -22,6 +22,9 @@ var __importStar = (this && this.__importStar) || function (mod) {
     __setModuleDefault(result, mod);
     return result;
 };
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.startServer = void 0;
 const fs_1 = require("fs");
@@ -30,9 +33,10 @@ const http_1 = require("http");
 const websocket_1 = require("websocket");
 const flowco_1 = require("flowco");
 const path_1 = require("path");
-const js_bundler_1 = require("js-bundler");
+const js_bundler_1 = require("js_bundler");
 const Url = __importStar(require("url"));
-const ts_node_1 = require("ts-node");
+const typescript_1 = __importDefault(require("typescript"));
+const jsx_transpiler_1 = require("jsx_transpiler");
 // import { minify } from "html-minifier-terser"
 let g_config;
 const configFileName = "server.config.js";
@@ -47,6 +51,7 @@ catch (e) {
     (0, fs_1.writeFileSync)(projectConfigFilePath, configFile);
     g_config = require(projectConfigFilePath);
 }
+const apiExt = g_config.apiExtension;
 g_config.defaultFile = joinUrl(g_config.defaultFile || "index.html");
 const site = new Map();
 const api = new Map();
@@ -64,15 +69,16 @@ const setCounter = (0, flowco_1.cell)((counter, action) => {
             break;
         case "dec":
             v !== 0 && v--;
+            v === 0 && connections.forEach(c => c.sendUTF("reload"));
             break;
     }
-    v === 0 && connections.forEach(c => c.sendUTF("reload"));
     return v;
 }, 0);
 async function startServer() {
     await setup(workingDir);
     httpServer = (0, http_1.createServer)(handleRequest);
     httpServer.listen(port, host).on("listening", () => {
+        console.clear();
         console.log(`Server running at ${uri}/`);
     });
     if (g_config.watch)
@@ -169,19 +175,20 @@ async function setup(workingDir) {
     await setupSiteFiles(workingDir);
     site.set("/", site.get(g_config.defaultFile));
 }
-async function setupSiteFiles(dir, url = "/") {
-    await Promise.allSettled((0, fs_1.readdirSync)(dir).map(async (file) => {
+function setupSiteFiles(dir, url = "/") {
+    return Promise.allSettled((0, fs_1.readdirSync)(dir).map(file => {
         const path = (0, path_1.join)(dir, file);
         const ext = (0, path_1.extname)(file);
         const fileUrl = joinUrl(url, file);
         if (ext === "")
-            await setupSiteFiles(path, fileUrl);
+            return setupSiteFiles(path, fileUrl);
         else if (!g_config.skipExtensions?.includes(ext)) {
-            await setupSiteFile(path, ext, fileUrl);
+            return setupSiteFile(path, ext, fileUrl);
         }
     }));
 }
 const jsWatchers = [];
+const impundledFiles = new Set();
 async function setupSiteFile(path, ext, url) {
     const plugin = g_config.plugins?.[ext];
     let file;
@@ -197,19 +204,20 @@ async function setupSiteFile(path, ext, url) {
         else if (ext === ".js" || ext === ".ts") {
             setSiteFile(url, Buffer.from(""));
             const urlObj = site.get(url);
+            impundledFiles.add(path);
             setCounter("inc");
-            (0, js_bundler_1.impundler)(path, { watch: g_config.watch }, str => {
-                urlObj.data = str;
+            return await (0, js_bundler_1.impundler)(path, { watch: g_config.watch }, async (str) => {
+                urlObj.data = Buffer.from(str);
                 setCounter("dec");
-            }).then(ifile => {
-                jsWatchers.push(ifile.watcher);
             });
-            return;
+        }
+        else if (ext === ".jsx" || ext === ".tsx") {
+            return handleJSX(path, url);
         }
         else
             file = await (0, promises_1.readFile)(path);
         if (ext === ".html")
-            setSiteFile(url, handleHtmlFile(file, url));
+            setSiteFile(url, Buffer.from(handleHtmlFile(file, url)));
         else
             setSiteFile(url, file);
     }
@@ -217,78 +225,62 @@ async function setupSiteFile(path, ext, url) {
         console.log(e);
     }
 }
-const utf8ContentType = new Set([
-    "text/html",
-    "application/xhtml+xml",
-    "application/xml",
-    "text/xml",
-    "text/plain",
-    "text/css",
-    "application/json",
-    "application/javascript",
-    "application/ecmascript",
-    "application/x-ecmascript",
-    "application/x-javascript",
-    "text/javascript",
-    "text/ecmascript",
-    "application/x-httpd-php",
-    "application/x-httpd-php-source",
-    "application/x-httpd-php3",
-    "application/x-httpd-php4",
-    "application/x-httpd-php5",
-    "application/x-httpd-php-source",
-    "application/x-httpd-php-script",
-    "application/x-httpd-php-code",
-    "application/x-httpd-php-code",
-    "application/x-httpd-php-source",
-    "application/x-httpd-php-src",
-    "application/x-httpd-php-script",
-    "application/x-httpd-php-code",
-    "application/x-httpd-php-code",
-    "application/x-httpd-php-source",
-    "application/x-httpd-php-src",
-    "application/x-httpd-php-script",
-    "application/x-httpd-php-code",
-    "application/x-httpd-php-code",
-    "application/x-httpd-php-source",
-    "application/x-httpd-php-src",
-    "application/x-httpd-php-script",
-    "application/x-httpd-php-code",
-    "application/x-httpd-php-code",
-    "application/x-httpd-php-source",
-    "application/x-httpd-php-src",
-    "application/x-httpd-php-script",
-    "application/x-httpd-php-code",
-    "application/x-httpd-php-code",
-    "application/x-httpd-php-source",
-    "application/x-httpd-php-src",
-    "application/x-httpd-php-script",
-    "application/x-httpd-php-code",
-    "application/x-httpd-php-code",
-    "application/x-httpd-php-source",
-    "application/x-httpd-php-src",
-    "application/x-httpd-php-script",
-    "application/x-httpd-php-",
-]);
+const jsxPlugin = {
+    ".jsx": (code) => (0, jsx_transpiler_1.transpileJSX)(code),
+    ".tsx": (code) => (0, jsx_transpiler_1.transpileJSX)(typescript_1.default.transpile(code, {
+        module: typescript_1.default.ModuleKind.Node16,
+        removeComments: true,
+        jsx: typescript_1.default.JsxEmit.Preserve,
+    })),
+};
+function handleJSX(filePath, url) {
+    url = url.slice(0, -4) + ".html";
+    impundledFiles.add(filePath);
+    setCounter("inc");
+    (0, js_bundler_1.impundler)(filePath, { watch: g_config.watch, plugins: jsxPlugin }, async (result, bundle) => {
+        const { index } = eval(result);
+        if (index === undefined) {
+            return bundle.unhandle();
+        }
+        if (index.length === 0) {
+            let file = Buffer.from("<!DOCTYPE html>" + index());
+            setSiteFile(url, Buffer.from(handleHtmlFile(file, url)));
+        }
+        else {
+            const toHtml = (params, x) => {
+                x.headers = {
+                    "Content-Type": "text/html",
+                };
+                return handleHtmlFile(Buffer.from("<!DOCTYPE html>" + index(params, x)), url);
+            };
+            api.set(url, toHtml);
+            handleIndexHtml(url, toHtml, api);
+        }
+        setCounter("dec");
+    });
+}
 function setSiteFile(url, data, headers = {}) {
     const contentType = getContentType(url);
     site.set(url, {
-        header: {
+        headers: {
             "Content-Type": contentType,
             // "Content-Length": data.length,
             ...headers,
         },
         data,
     });
+    handleIndexHtml(url, site.get(url), site);
+}
+function handleIndexHtml(url, value, source) {
     if ((0, path_1.basename)(url) === "index.html") {
         const dirUrl = joinUrl(url, "..");
-        site.set(dirUrl, site.get(url));
-        site.set(dirUrl + ".html", site.get(url));
+        source.set(dirUrl, value);
+        source.set(dirUrl + ".html", value);
         if (dirUrl === g_config.defaultFile)
-            site.set("/", site.get(url));
+            source.set("/", value);
     }
     if (url === g_config.defaultFile)
-        site.set("/", site.get(url));
+        source.set("/", value);
 }
 const cws = `const __socket = new WebSocket('ws://${host}:${port}');
 __socket.addEventListener('open', function (event) {
@@ -301,7 +293,7 @@ function handleHtmlFile(data, url) {
     let dataStr = validateLinks(data.toString(), url);
     if (g_config.watch)
         dataStr = dataStr.replace("</body>", "<script>" + cws + "</script>");
-    return Buffer.from(dataStr);
+    return dataStr;
 }
 function getContentType(path) {
     switch ((0, path_1.extname)(path)) {
@@ -325,7 +317,7 @@ function getContentType(path) {
             return "text/plain";
     }
 }
-let wsServer, watcher;
+let wsServer;
 function watchStructure() {
     wsServer = new websocket_1.server({ httpServer });
     wsServer.on("request", request => {
@@ -336,18 +328,27 @@ function watchStructure() {
         });
     });
     const isReloadExtRgx = g_config.reloadExtRgx;
-    watcher = (0, fs_1.watch)(workingDir, { recursive: true }, (0, flowco_1.shield)(async (eventType, filename) => {
+    const handledFiles = new Set();
+    const watcher = (0, fs_1.watch)(workingDir, { recursive: true }, async (eventType, filename) => {
+        if (handledFiles.has(filename))
+            return;
+        handledFiles.add(filename);
+        setTimeout(() => {
+            handledFiles.clear();
+        }, 300);
         const ext = (0, path_1.extname)(filename);
         if (eventType === "change" && ext !== "") {
             const isLoad = isReloadExtRgx?.test(ext);
-            isLoad && setCounter("inc");
-            if (ext !== ".js") {
+            const filePath = (0, path_1.join)(workingDir, filename);
+            if (!impundledFiles.has(filePath)) {
+                isLoad && setCounter("inc");
                 const url = joinUrl(filename);
-                await setupSiteFile((0, path_1.join)(workingDir, filename), ext, url);
+                await setupSiteFile(filePath, ext, url);
                 isLoad && setCounter("dec");
             }
         }
-    }, 300));
+    });
+    jsWatchers.push(watcher);
 }
 function joinUrl(...args) {
     return ("/" +
@@ -372,17 +373,22 @@ const apiFolderPath = (0, path_1.join)(process.cwd(), "./api");
 async function initApi() {
     try {
         await (0, promises_1.access)(apiFolderPath);
+    }
+    catch (e) {
+        return console.log("there is no api folder");
+    }
+    try {
         await setApiFolder(apiFolderPath);
     }
     catch (e) {
-        console.log("there is no api folder");
+        if (g_config.watch) {
+            console.log(e);
+        }
+        else
+            throw e;
     }
 }
 const clientApiFolderPath = (0, path_1.join)(process.cwd(), "./clientApi");
-const apiExt = g_config.apiExtension;
-if (apiExt === ".ts")
-    (0, ts_node_1.register)({ typeCheck: false });
-const apiWatchers = [];
 async function setApiFolder(dir, pre = "/") {
     try {
         await (0, promises_1.access)(clientApiFolderPath);
@@ -394,41 +400,38 @@ async function setApiFolder(dir, pre = "/") {
         const path = (0, path_1.join)(dir, file);
         const ext = (0, path_1.extname)(file);
         if (ext === apiExt) {
-            addApi(path, pre + file.slice(0, -3) + "/");
-            genFile(path);
-            if (g_config.watch)
-                apiWatchers.push((0, fs_1.watch)(path, (0, flowco_1.shield)(eventType => {
-                    if (eventType === "change")
-                        genFile(path);
-                }, 300)));
+            return setApi(path, pre + file.slice(0, -3) + "/");
         }
         else if (ext === "")
-            await setApiFolder(path, pre + file + "/");
+            return setApiFolder(path, pre + file + "/");
     }));
 }
-async function addApi(path, pre) {
-    const oApi = require(path);
-    for (const name in oApi) {
-        const f = oApi[name];
-        api.set(pre + name, f);
-    }
+function setApi(path, pre) {
+    impundledFiles.add(path);
+    return (0, js_bundler_1.impundler)(path, { watch: g_config.watch }, async (code) => {
+        setCounter("inc");
+        const oApi = eval(code);
+        for (const name in oApi)
+            api.set(pre + name, oApi[name]);
+        await genFile(path, oApi);
+        setCounter("dec");
+    });
 }
-async function genFile(filePath) {
+async function genFile(filePath, api) {
     let ret;
     switch ((0, path_1.extname)(filePath)) {
         case ".js":
-            ret = await generateClientApiFileJS(filePath);
+            ret = await generateClientApiFileJS(filePath, api);
             break;
         case ".ts":
-            ret = await generateClientApiFileTS(filePath);
+            ret = await generateClientApiFileTS(filePath, api);
             break;
     }
     await (0, promises_1.writeFile)((0, path_1.join)(clientApiFolderPath, filePath.slice(apiFolderPath.length, -3) + apiExt), ret);
 }
-async function generateClientApiFileJS(filePath) {
-    const oApi = require(filePath);
+async function generateClientApiFileJS(filePath, api) {
     return `module.exports = {
-    ${Object.keys(oApi)
+    ${Object.keys(api)
         .map(name => `${name}: (data, options={}) => {
       return fetch("${filePath.slice(0, -3)}", {
         method: "POST",
@@ -439,13 +442,10 @@ async function generateClientApiFileJS(filePath) {
         .join()}
   }`;
 }
-async function generateClientApiFileTS(filePath) {
-    const oApi = require(filePath);
-    const oApiPath = filePath
-        .slice(apiFolderPath.length, -3)
-        .replaceAll("\\", "/");
-    return `import * as __oApi from "../api${oApiPath}"\n
-    ${Object.keys(oApi)
+async function generateClientApiFileTS(filePath, api) {
+    const apiPath = filePath.slice(apiFolderPath.length, -3).replaceAll("\\", "/");
+    return `import * as __oApi from "../api${apiPath}"\n
+    ${Object.keys(api)
         .filter(name => name !== "__esModule")
         .map(name => `export function ${name} (data:Parameters<typeof __oApi.${name}>[0], options:RequestInit={}) {
   type ObjRetType = Extract<Awaited<ReturnType<typeof __oApi.${name}>>, Record<any, any>>
@@ -456,7 +456,7 @@ async function generateClientApiFileTS(filePath) {
     : Omit<Response, "json"> & {
         json: () => Promise<ObjRetType>
       }
-  return fetch("${oApiPath}/${name}", {
+  return fetch("${apiPath}/${name}", {
     method: "POST",
     body: JSON.stringify(data),
     ...options
@@ -468,11 +468,10 @@ async function generateClientApiFileTS(filePath) {
 startServer();
 function terminate() {
     console.log("terminating...");
-    watcher.close();
+    jsWatchers.forEach(w => w.close());
     wsServer.closeAllConnections();
     httpServer.close();
-    jsWatchers.forEach(w => w.close());
-    apiWatchers.forEach(w => w.close());
+    (0, js_bundler_1.closeAllBundles)();
 }
 process.on("SIGINT", () => process.exit());
 process.on("SIGTERM", () => process.exit());

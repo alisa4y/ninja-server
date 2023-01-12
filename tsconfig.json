@@ -6,8 +6,12 @@
     "moduleResolution": "Node",
     "module": "Node16",
     "esModuleInterop": true,
+    "jsx": "preserve"
   },
   "include": [
     "src",
-  ]
+    "public",
+    "public/greet",
+    "public/greet/index.tsx"
+  ],
 }
