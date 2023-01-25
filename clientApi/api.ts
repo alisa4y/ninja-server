@@ -60,4 +60,19 @@ export function greet (data:Parameters<typeof __oApi.greet>[0], options:RequestI
     ...options
   }) as Promise<RetType>
 }
+export function manipulateRuntimeIndex (data:Parameters<typeof __oApi.manipulateRuntimeIndex>[0], options:RequestInit={}) {
+  type ObjRetType = Extract<Awaited<ReturnType<typeof __oApi.manipulateRuntimeIndex>>, Record<any, any>>
+  type RetType =  ObjRetType extends never 
+    ? Omit<Response, "json"> & {
+      json: () => Promise<never>
+    }
+    : Omit<Response, "json"> & {
+        json: () => Promise<ObjRetType>
+      }
+  return fetch("/api/manipulateRuntimeIndex", {
+    method: "POST",
+    body: JSON.stringify(data),
+    ...options
+  }) as Promise<RetType>
+}
   

@@ -110,3 +110,21 @@ describe("parsing jsx ", () => {
     cy.get("body").should("have.css", "background-color", "rgb(199, 255, 199)")
   })
 })
+describe("can manipulate files at runtime", () => {
+  it("can add file at runtime ", () => {
+    cy.request("http://localhost:3000/api/manipulateRuntimeIndex?action=delete")
+    cy.request({
+      failOnStatusCode: false,
+      url: "http://localhost:3000/runtime",
+    }).then(res => {
+      expect(res.status).equal(404)
+      cy.request(
+        "http://localhost:3000/api/manipulateRuntimeIndex?action=create"
+      ).then(res => {
+        if (res.status === 200) {
+          cy.request("http://localhost:3000/runtime")
+        }
+      })
+    })
+  })
+})

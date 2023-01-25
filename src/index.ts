@@ -7,13 +7,14 @@ import {
   readdirSync,
   FSWatcher,
 } from "fs"
-import { access, readFile, mkdir, writeFile } from "fs/promises"
+import { access, readFile, mkdir, writeFile, stat } from "fs/promises"
 import { createServer, IncomingMessage, ServerResponse } from "http"
 import { connection, server as webSocketServer } from "websocket"
 import { shield, cell, debounce, timeout } from "flowco"
 import { join, extname, basename } from "path"
 import { closeAllBundles, impundler } from "js_bundler"
-import * as Url from "url"
+import { URL } from "url"
+import querystring from "querystring"
 import ts from "typescript"
 import { transpileJSX } from "jsx_transpiler"
 
@@ -43,18 +44,19 @@ const projectConfigFilePath = join(process.cwd(), configFileName)
 try {
   g_config = require(projectConfigFilePath)
 } catch (e) {
-  console.warn(e)
-  const configFilePath = join(__dirname, "..", configFileName)
-  const configFile = readFileSync(configFilePath, "utf8")
-  writeFileSync(projectConfigFilePath, configFile)
-  g_config = require(projectConfigFilePath)
+  if (e.code === "ENOENT") {
+    const configFilePath = join(__dirname, "..", configFileName)
+    const configFile = readFileSync(configFilePath, "utf8")
+    writeFileSync(projectConfigFilePath, configFile)
+    g_config = require(projectConfigFilePath)
+  } else throw e
 }
 const apiExt = g_config.apiExtension
 g_config.defaultFile = joinUrl(g_config.defaultFile || "index.html")
 
 type WebPageI = { headers: any; data: Buffer }
 const site: Map<string, WebPageI> = new Map()
-const api = new Map()
+const api: Map<string, any> = new Map()
 
 let httpServer: ReturnType<typeof createServer>
 
@@ -83,31 +85,46 @@ export async function startServer() {
 
   httpServer = createServer(handleRequest)
   httpServer.listen(port, host).on("listening", () => {
-    console.clear()
+    // console.clear()
     console.log(`Server running at ${uri}/`)
   })
   if (g_config.watch) watchStructure()
   await initApi()
 }
+const cws = `const __socket = new WebSocket('ws://${host}:${port}');
+__socket.addEventListener('open', function (event) {
+    __socket.send('Hello Server!');
+});
+__socket.addEventListener('message', function (event) {
+    if(event.data === 'reload') window.location.reload();
+});`
 const nf = {
-  header: { "Content-Type": "text/plain" },
-  data: "Not Found",
+  headers: { "Content-Type": "text/html" },
+  data: Buffer.from(`<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+  </head>
+  <body>
+    <h1>Not Found</h1>
+    <script>${cws}</script>
+  </body>
+</html>`),
   statusCode: 404,
 }
 const bodyMethod = ["POST", "PUT"]
 const paramMethod = ["GET", "DELETE"]
-function getBody(req: InstanceType<typeof IncomingMessage>) {
+function getBody(req: InstanceType<typeof IncomingMessage>): Promise<string> {
   return new Promise((res, rej) => {
     let body = ""
     req.on("data", (chunk: string) => {
       body += chunk
     })
     req.on("end", () => {
-      try {
-        res(JSON.parse(body))
-      } catch (e) {
-        res(body)
-      }
+      res(body)
     })
     req.on("error", rej)
   })
@@ -129,19 +146,27 @@ async function handleRequest(
   const { url, method } = req
   let result: any = site.get(url)
   if (result === undefined) {
-    let data
+    let data: string
     let paramObj
     const exParam: XParam = { req, headers: {}, statusCode: 200 }
     try {
       if (bodyMethod.includes(method)) {
-        paramObj = await getBody(req)
+        paramObj = JSON.parse(await getBody(req))
       } else if (paramMethod.includes(method)) {
-        paramObj = Url.parse(url, true).query
+        const u = new URL(url, `http://${req.headers.host}`)
+        paramObj = querystring.parse(u.searchParams.toString())
       }
+    } catch (e) {
+      console.warn("failed to fetch params")
+      console.warn(e)
+      res.writeHead(400, { "Content-Type": "text/plain" })
+      return res.end(e.message)
+    }
+    try {
       data = await api.get(stripUrl(url))?.(paramObj, exParam)
     } catch (e) {
+      console.warn(e)
       exParam.statusCode = 500
-      console.log(e.message)
       data = "something went wrong"
     }
     if (data === undefined) {
@@ -183,12 +208,12 @@ async function setup(workingDir: string) {
 }
 function setupSiteFiles(dir: string, url = "/"): Promise<any> {
   return Promise.allSettled(
-    readdirSync(dir).map(file => {
+    readdirSync(dir).map(async file => {
       const path = join(dir, file)
       const ext = extname(file)
       const fileUrl = joinUrl(url, file)
-      if (ext === "") return setupSiteFiles(path, fileUrl)
-      else if (!g_config.skipExtensions?.includes(ext)) {
+      if ((await stat(path)).isDirectory()) return setupSiteFiles(path, fileUrl)
+      else if (ext !== "" && !g_config.skipExtensions?.includes(ext)) {
         return setupSiteFile(path, ext, fileUrl)
       }
     })
@@ -238,8 +263,10 @@ const jsxPlugin = {
         module: ts.ModuleKind.Node16,
         removeComments: true,
         jsx: ts.JsxEmit.Preserve,
+        esModuleInterop: true,
       })
     ),
+  ".svg": (code: string) => `export default \`${code}\``,
 }
 function handleJSX(filePath: string, url: string) {
   url = url.slice(0, -4) + ".html"
@@ -294,13 +321,7 @@ function handleIndexHtml(url: string, value: any, source: Map<string, any>) {
   }
   if (url === g_config.defaultFile) source.set("/", value)
 }
-const cws = `const __socket = new WebSocket('ws://${host}:${port}');
-__socket.addEventListener('open', function (event) {
-    __socket.send('Hello Server!');
-});
-__socket.addEventListener('message', function (event) {
-    if(event.data === 'reload') window.location.reload();
-});`
+
 function handleHtmlFile(data: Buffer, url: string) {
   let dataStr = validateLinks(data.toString(), url)
   if (g_config.watch)
@@ -345,18 +366,21 @@ function watchStructure() {
     workingDir,
     { recursive: true },
     async (eventType, filename) => {
-      if (handledFiles.has(filename)) return
+      const url = joinUrl(filename)
+      if (eventType === "rename") {
+        removeUrl(url)
+        return setCounter("dec")
+      } else if (handledFiles.has(filename)) return
       handledFiles.add(filename)
       setTimeout(() => {
         handledFiles.clear()
       }, 300)
       const ext = extname(filename)
-      if (eventType === "change" && ext !== "") {
+      if (ext !== "") {
         const isLoad = isReloadExtRgx?.test(ext)
         const filePath = join(workingDir, filename)
         if (!impundledFiles.has(filePath)) {
           isLoad && setCounter("inc")
-          const url = joinUrl(filename)
           await setupSiteFile(filePath, ext, url)
           isLoad && setCounter("dec")
         }
@@ -364,6 +388,16 @@ function watchStructure() {
     }
   )
   jsWatchers.push(watcher)
+}
+function removeUrl(url: string) {
+  if (site.has(url)) {
+    site.set(url, nf)
+    handleIndexHtml(url, nf, site)
+  } else {
+    for (const u of api.keys()) {
+      if (joinUrl(u, "..") === url) api.set(u, nf)
+    }
+  }
 }
 function joinUrl(...args: string[]) {
   return (
@@ -398,13 +432,7 @@ async function initApi() {
   } catch (e) {
     return console.log("there is no api folder")
   }
-  try {
-    await setApiFolder(apiFolderPath)
-  } catch (e) {
-    if (g_config.watch) {
-      console.log(e)
-    } else throw e
-  }
+  await setApiFolder(apiFolderPath)
 }
 const clientApiFolderPath = join(process.cwd(), "./clientApi")
 async function setApiFolder(dir: string, pre = "/") {
@@ -419,7 +447,8 @@ async function setApiFolder(dir: string, pre = "/") {
       const ext = extname(file)
       if (ext === apiExt) {
         return setApi(path, pre + file.slice(0, -3) + "/")
-      } else if (ext === "") return setApiFolder(path, pre + file + "/")
+      } else if ((await stat(path)).isDirectory())
+        return setApiFolder(path, pre + file + "/")
     })
   )
 }
@@ -427,9 +456,16 @@ function setApi(path: string, pre: string) {
   impundledFiles.add(path)
   return impundler(path, { watch: g_config.watch }, async code => {
     setCounter("inc")
-    const oApi = eval(code)
-    for (const name in oApi) api.set(pre + name, oApi[name])
-    await genFile(path, oApi)
+    try {
+      const oApi = eval(code)
+      for (const name in oApi) api.set(pre + name, oApi[name])
+      await genFile(path, oApi)
+    } catch (e) {
+      console.warn("failed to evaluate api at: " + path)
+      if (g_config.watch) {
+        console.warn(e)
+      } else throw e
+    }
     setCounter("dec")
   })
 }
@@ -480,7 +516,11 @@ async function generateClientApiFileTS(
     ${Object.keys(api)
       .filter(name => name !== "__esModule")
       .map(
-        name => `export function ${name} (data:Parameters<typeof __oApi.${name}>[0], options:RequestInit={}) {
+        name => `export function ${name} (${
+          api[name].length === 0
+            ? ""
+            : `data:Parameters<typeof __oApi.${name}>[0], `
+        }options:RequestInit={}) {
   type ObjRetType = Extract<Awaited<ReturnType<typeof __oApi.${name}>>, Record<any, any>>
   type RetType =  ObjRetType extends never 
     ? Omit<Response, "json"> & {
@@ -491,7 +531,7 @@ async function generateClientApiFileTS(
       }
   return fetch("${apiPath}/${name}", {
     method: "POST",
-    body: JSON.stringify(data),
+    ${api[name].length === 0 ? "" : `body: JSON.stringify(data),`}
     ...options
   }) as Promise<RetType>
 }`
@@ -513,3 +553,10 @@ function terminate() {
 process.on("SIGINT", () => process.exit())
 process.on("SIGTERM", () => process.exit())
 process.on("exit", terminate)
+
+process.on("uncaughtException", e => {
+  console.warn(e)
+})
+process.on("unhandledRejection", e => {
+  console.warn(e)
+})

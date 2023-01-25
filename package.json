@@ -25,7 +25,7 @@
     "watchable"
   ],
   "author": "ali safari",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
     "bafu": "file:../js-functional",
     "dotenv": "^16.0.3",

@@ -1,3 +1,5 @@
+import { unlinkSync, writeFileSync } from "fs"
+import { join } from "path"
 import { XParam } from "../src/index"
 require("dotenv").config()
 const jwt = require("jsonwebtoken")
@@ -76,4 +78,32 @@ export const add = ({ username, password, auth }: User, x: XParam) => {
 }
 export function greet() {
   return "hi"
+}
+export function manipulateRuntimeIndex({ action }: { action: string }) {
+  switch (action) {
+    case "create":
+      writeFileSync(
+        join(process.cwd(), "public/runtime/index.html"),
+        `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>runtime</title>
+  </head>
+  <body>
+    <h1>created and got added at runtime</h1>
+  </body>
+</html>
+      `,
+        "utf-8"
+      )
+      return "created"
+    case "delete":
+      try {
+        unlinkSync(join(process.cwd(), "public/runtime/index.html"))
+      } catch (e) {}
+      return "deleted"
+  }
 }
