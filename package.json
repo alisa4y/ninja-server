@@ -1,6 +1,6 @@
 {
-  "name": "ez-server",
-  "version": "1.0.0",
+  "name": "ultimate-server",
+  "version": "0.0.1",
   "description": "",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

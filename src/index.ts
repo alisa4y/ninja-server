@@ -201,12 +201,12 @@ async function setup(publicDir: string) {
     mkdirSync(publicDir)
     const wdPath = join(publicDir, "home")
     mkdirSync(wdPath)
-    const homePath = join(__dirname, "../public/home")
-    const files = readdirSync(homePath)
-    files.forEach(f => {
-      const data = readFileSync(join(homePath, f))
-      writeFileSync(join(wdPath, f), data)
-    })
+    // const homePath = join(__dirname, "../public/home")
+    // const files = readdirSync(homePath)
+    // files.forEach(f => {
+    //   const data = readFileSync(join(homePath, f))
+    //   writeFileSync(join(wdPath, f), data)
+    // })
   }
 
   await setupSiteFiles(publicDir)

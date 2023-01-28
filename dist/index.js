@@ -177,12 +177,12 @@ async function setup(publicDir) {
         (0, fs_1.mkdirSync)(publicDir);
         const wdPath = (0, path_1.join)(publicDir, "home");
         (0, fs_1.mkdirSync)(wdPath);
-        const homePath = (0, path_1.join)(__dirname, "../public/home");
-        const files = (0, fs_1.readdirSync)(homePath);
-        files.forEach(f => {
-            const data = (0, fs_1.readFileSync)((0, path_1.join)(homePath, f));
-            (0, fs_1.writeFileSync)((0, path_1.join)(wdPath, f), data);
-        });
+        // const homePath = join(__dirname, "../public/home")
+        // const files = readdirSync(homePath)
+        // files.forEach(f => {
+        //   const data = readFileSync(join(homePath, f))
+        //   writeFileSync(join(wdPath, f), data)
+        // })
     }
     await setupSiteFiles(publicDir);
     site.set("/", site.get(g_config.defaultFile));

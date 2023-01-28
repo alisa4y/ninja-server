@@ -1,5 +1,8 @@
 api
+clientApi
 cypress
+public
 src
+.env
 cypress.config.ts
 tsconfig.json
