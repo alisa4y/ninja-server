@@ -10,14 +10,14 @@ import {
 import { access, readFile, mkdir, writeFile, stat } from "fs/promises"
 import { createServer, IncomingMessage, ServerResponse } from "http"
 import { connection, server as webSocketServer } from "websocket"
-import { shield, cell, debounce, timeout } from "flowco"
+import { cell, debounce } from "vaco"
 import { join, extname, basename } from "path"
-import { closeAllBundles, impundler } from "js_bundler"
+import { closeAllBundles, impundler } from "bundlex"
 import { URL } from "url"
 import querystring from "querystring"
 import ts from "typescript"
-import { transpileJSX } from "jsx_transpiler"
-
+import { transpileJSX } from "jsxpiler"
+import { curry } from "bafu"
 // import { minify } from "html-minifier-terser"
 
 let g_config: {
@@ -62,7 +62,7 @@ let httpServer: ReturnType<typeof createServer>
 
 const { host, port } = g_config
 const uri = port === 80 ? `http://${host}` : `http://${host}:${port}`
-const workingDir = join(process.cwd(), g_config.publicDir)
+const publicDir = join(process.cwd(), g_config.publicDir)
 
 // -------------------------------  watch variables  -------------------------------
 const connections: Set<connection> = new Set()
@@ -81,7 +81,7 @@ const setCounter = cell((counter: number, action: "inc" | "dec") => {
   return v
 }, 0)
 export async function startServer() {
-  await setup(workingDir)
+  await setup(publicDir)
 
   httpServer = createServer(handleRequest)
   httpServer.listen(port, host).on("listening", () => {
@@ -139,61 +139,67 @@ export type XParam = {
   headers: Record<string, any>
   statusCode: number
 }
+async function getParams(req: InstanceType<typeof IncomingMessage>) {
+  const { url, method } = req
+  if (bodyMethod.includes(method)) {
+    return JSON.parse(await getBody(req))
+  } else if (paramMethod.includes(method)) {
+    const u = new URL(url, `http://${req.headers.host}`)
+    return querystring.parse(u.searchParams.toString())
+  }
+}
+function respond(res: ServerResponse, result: any) {
+  const { headers, data, statusCode = 200 } = result
+  res.writeHead(statusCode, headers)
+  res.end(data)
+}
 async function handleRequest(
   req: InstanceType<typeof IncomingMessage>,
   res: ServerResponse
 ) {
-  const { url, method } = req
-  let result: any = site.get(url)
-  if (result === undefined) {
-    let data: string
+  const { url } = req
+  const end = curry(respond, res)
+  if (site.has(url)) {
+    end(site.get(url))
+  } else if (api.has(stripUrl(url))) {
     let paramObj
-    const exParam: XParam = { req, headers: {}, statusCode: 200 }
     try {
-      if (bodyMethod.includes(method)) {
-        paramObj = JSON.parse(await getBody(req))
-      } else if (paramMethod.includes(method)) {
-        const u = new URL(url, `http://${req.headers.host}`)
-        paramObj = querystring.parse(u.searchParams.toString())
-      }
+      paramObj = await getParams(req)
     } catch (e) {
       console.warn("failed to fetch params")
       console.warn(e)
       res.writeHead(400, { "Content-Type": "text/plain" })
       return res.end(e.message)
     }
+    let data: string
+    const exParam: XParam = { req, headers: {}, statusCode: 200 }
     try {
-      data = await api.get(stripUrl(url))?.(paramObj, exParam)
+      data = await api.get(stripUrl(url))(paramObj, exParam)
     } catch (e) {
       console.warn(e)
       exParam.statusCode = 500
       data = "something went wrong"
     }
-    if (data === undefined) {
-      result = site.get(g_config.notFound) || nf
-    } else {
-      if (data === null) data = ""
-      result = {
-        headers: {
-          "Content-Type":
-            typeof data === "string" ? "text/plain" : "application/json",
-          ...exParam.headers,
-        },
-        data: typeof data === "string" ? data : JSON.stringify(data),
-        statusCode: exParam.statusCode,
-      }
-    }
+    if (data === null) data = ""
+    end({
+      headers: {
+        "Content-Type":
+          typeof data === "string" ? "text/plain" : "application/json",
+        ...exParam.headers,
+      },
+      data: typeof data === "string" ? data : JSON.stringify(data),
+      statusCode: exParam.statusCode,
+    })
+  } else {
+    end(site.get(g_config.notFound) || nf)
   }
-  const { headers, data, statusCode = 200 } = result
-  res.writeHead(statusCode, headers)
-  res.end(data)
 }
-async function setup(workingDir: string) {
+async function setup(publicDir: string) {
   try {
-    await access(workingDir, constants.F_OK)
+    await access(publicDir, constants.F_OK)
   } catch (err) {
-    mkdirSync(workingDir)
-    const wdPath = join(workingDir, "home")
+    mkdirSync(publicDir)
+    const wdPath = join(publicDir, "home")
     mkdirSync(wdPath)
     const homePath = join(__dirname, "../public/home")
     const files = readdirSync(homePath)
@@ -203,7 +209,7 @@ async function setup(workingDir: string) {
     })
   }
 
-  await setupSiteFiles(workingDir)
+  await setupSiteFiles(publicDir)
   site.set("/", site.get(g_config.defaultFile))
 }
 function setupSiteFiles(dir: string, url = "/"): Promise<any> {
@@ -213,7 +219,7 @@ function setupSiteFiles(dir: string, url = "/"): Promise<any> {
       const ext = extname(file)
       const fileUrl = joinUrl(url, file)
       if ((await stat(path)).isDirectory()) return setupSiteFiles(path, fileUrl)
-      else if (ext !== "" && !g_config.skipExtensions?.includes(ext)) {
+      else if (!g_config.skipExtensions?.includes(ext)) {
         return setupSiteFile(path, ext, fileUrl)
       }
     })
@@ -300,6 +306,7 @@ function handleJSX(filePath: string, url: string) {
     }
   )
 }
+
 function setSiteFile(url: string, data: Buffer, headers = {}) {
   const contentType = getContentType(url)
   site.set(url, {
@@ -352,6 +359,7 @@ function getContentType(path: string) {
 }
 let wsServer: webSocketServer
 function watchStructure() {
+  // it's watching the public directory for change then signal websocket to reload
   wsServer = new webSocketServer({ httpServer })
   wsServer.on("request", request => {
     const con = request.accept()
@@ -360,44 +368,51 @@ function watchStructure() {
       connections.delete(con)
     })
   })
-  const isReloadExtRgx = g_config.reloadExtRgx
-  const handledFiles: Set<string> = new Set()
+  const handledFiles: Map<string, ReturnType<typeof debounce<Fn>>> = new Map()
   const watcher = watch(
-    workingDir,
+    publicDir,
     { recursive: true },
     async (eventType, filename) => {
-      const url = joinUrl(filename)
+      const filePath = join(publicDir, filename)
+      const ext = extname(filename)
+      if (ext === "" || impundledFiles.has(filePath)) return
+      else if (handledFiles.has(filename)) return handledFiles.get(filename)()
+
       if (eventType === "rename") {
-        removeUrl(url)
-        return setCounter("dec")
-      } else if (handledFiles.has(filename)) return
-      handledFiles.add(filename)
+        try {
+          await access(filePath)
+        } catch (e) {
+          removeUrl(joinUrl(filename))
+          return setCounter("dec")
+        }
+      }
       setTimeout(() => {
         handledFiles.clear()
       }, 300)
-      const ext = extname(filename)
-      if (ext !== "") {
-        const isLoad = isReloadExtRgx?.test(ext)
-        const filePath = join(workingDir, filename)
-        if (!impundledFiles.has(filePath)) {
-          isLoad && setCounter("inc")
-          await setupSiteFile(filePath, ext, url)
-          isLoad && setCounter("dec")
-        }
-      }
+      const d = debounce(async () => {
+        const isLoad = g_config.reloadExtRgx?.test(ext)
+        isLoad && setCounter("inc")
+        await setupSiteFile(filePath, ext, joinUrl(filename))
+        isLoad && setCounter("dec")
+      }, 100)
+      d()
+      handledFiles.set(filename, d)
     }
   )
   jsWatchers.push(watcher)
 }
-function removeUrl(url: string) {
-  if (site.has(url)) {
-    site.set(url, nf)
-    handleIndexHtml(url, nf, site)
-  } else {
-    for (const u of api.keys()) {
-      if (joinUrl(u, "..") === url) api.set(u, nf)
-    }
+const indexExts = /\.[jt]sx$/
+async function removeUrl(url: string) {
+  if (site.has(url)) removeSiteUrl(url, site)
+  else if (indexExts.test(url)) {
+    const xUrl = url.slice(0, -4) + ".html"
+    if (site.has(url)) removeSiteUrl(xUrl, site)
+    else if (api.has(xUrl)) removeSiteUrl(xUrl, api)
   }
+}
+function removeSiteUrl(url: string, source: Map<string, any>) {
+  source.set(url, source.get(g_config.notFound) || nf)
+  handleIndexHtml(url, source.get(g_config.notFound) || nf, source)
 }
 function joinUrl(...args: string[]) {
   return (
@@ -454,21 +469,26 @@ async function setApiFolder(dir: string, pre = "/") {
 }
 function setApi(path: string, pre: string) {
   impundledFiles.add(path)
-  return impundler(path, { watch: g_config.watch }, async code => {
-    setCounter("inc")
-    try {
-      const oApi = eval(code)
-      for (const name in oApi) api.set(pre + name, oApi[name])
-      await genFile(path, oApi)
-    } catch (e) {
-      console.warn("failed to evaluate api at: " + path)
-      if (g_config.watch) {
-        console.warn(e)
-      } else throw e
+  return impundler(
+    path,
+    { watch: g_config.watch, bundleNodeModules: false },
+    async code => {
+      setCounter("inc")
+      try {
+        const oApi = eval(code)
+        for (const name in oApi) api.set(pre + name, oApi[name])
+        await genFile(path, oApi)
+      } catch (e) {
+        console.warn("failed to evaluate api at: " + path)
+        if (g_config.watch) {
+          console.warn(e)
+        } else throw e
+      }
+      setCounter("dec")
     }
-    setCounter("dec")
-  })
+  )
 }
+
 async function genFile(filePath: string, api: Record<string, any>) {
   let ret
   switch (extname(filePath)) {
@@ -529,11 +549,13 @@ async function generateClientApiFileTS(
     : Omit<Response, "json"> & {
         json: () => Promise<ObjRetType>
       }
-  return fetch("${apiPath}/${name}", {
-    method: "POST",
-    ${api[name].length === 0 ? "" : `body: JSON.stringify(data),`}
-    ...options
-  }) as Promise<RetType>
+  return fetch("${apiPath}/${name}"
+    ${
+      api[name].length === 0
+        ? ", options"
+        : `, {method: "POST",body: JSON.stringify(data),...options}`
+    }
+    ) as Promise<RetType>
 }`
       )
       .join("\n")}

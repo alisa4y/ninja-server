@@ -1,0 +1,19 @@
+create folder
+  folder -> rename
+  folder -> change
+
+delete folder 
+  folder -> rename
+
+create file 
+  file -> rename
+  folder -> change
+
+save file
+  file -> change // may signal multiple times
+
+delete file
+  file -> rename
+  folder -> change
+
+copy and paste folder will do all the signals for both folder and files in it

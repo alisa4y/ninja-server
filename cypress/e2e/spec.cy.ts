@@ -122,7 +122,9 @@ describe("can manipulate files at runtime", () => {
         "http://localhost:3000/api/manipulateRuntimeIndex?action=create"
       ).then(res => {
         if (res.status === 200) {
-          cy.request("http://localhost:3000/runtime")
+          cy.wait(200).then(() => {
+            cy.request("http://localhost:3000/runtime")
+          })
         }
       })
     })
