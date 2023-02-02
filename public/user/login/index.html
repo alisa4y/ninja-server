@@ -29,6 +29,14 @@
       const messageElm = document.getElementById("message")
       const btnElm = document.querySelector("button#post")
       const btnGet = document.querySelector("button#get")
+      function onSuccess({ message, token }) {
+        messageElm.textContent = message
+        if (token) {
+          const d = new Date()
+          d.setTime(Date.now() + 3600)
+          document.cookie = `token=${token}; expires=${d.toUTCString()}; path=/;`
+        }
+      }
       btnElm.addEventListener("click", e => {
         fetch("/api/login", {
           method: "POST",
@@ -36,30 +44,18 @@
             username: usernameInp.value,
             password: passwordInp.value,
           }),
+        }).then(async r => {
+          if (r.ok) return r.json().then(onSuccess)
+          else messageElm.textContent = await r.text()
         })
-          .then(r => r.json())
-          .then(({ message, token }) => {
-            messageElm.textContent = message
-            if (token) {
-              const d = new Date()
-              d.setTime(Date.now() + 3600)
-              document.cookie = `token=${token}; expires=${d.toUTCString()}; path=/;`
-            }
-          })
       })
       btnGet.addEventListener("click", e => {
         fetch(
           `/api/login?username=${usernameInp.value}&password=${passwordInp.value}`
-        )
-          .then(r => r.json())
-          .then(({ message, token }) => {
-            messageElm.textContent = message
-            if (token) {
-              const d = new Date()
-              d.setTime(Date.now() + 3600)
-              document.cookie = `token=${token}; expires=${d.toUTCString()}; path=/;`
-            }
-          })
+        ).then(async r => {
+          if (r.ok) return r.json().then(onSuccess)
+          else messageElm.textContent = await r.text()
+        })
       })
     </script>
   </body>

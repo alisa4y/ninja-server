@@ -1,9 +1,8 @@
 import { unlinkSync, writeFileSync } from "fs"
 import { join } from "path"
-import { XParam } from "../src/index"
+import { XCon } from "../src/index"
 require("dotenv").config()
 const jwt = require("jsonwebtoken")
-
 type User = {
   username: string
   password: string
@@ -26,10 +25,15 @@ const init = JSON.stringify(users)
 export function reset() {
   users = JSON.parse(init)
 }
-export function login({ username, password }: Omit<User, "auth">): {
-  token?: string
-  message: string
-} {
+export function login(
+  { username, password }: Omit<User, "auth">,
+  x: XCon
+):
+  | {
+      token: string
+      message: string
+    }
+  | string {
   const exist = users.some(({ username: u, password: p }) => {
     return u === username && p === password
   })
@@ -40,23 +44,17 @@ export function login({ username, password }: Omit<User, "auth">): {
       }),
       message: "logged in successfully",
     }
-  else
-    return {
-      message: "username or password is wrong",
-    }
+  else return x.error(400, "username or password is wrong")
 }
-export const add = ({ username, password, auth }: User, x: XParam) => {
-  const { req } = x
+export const add = ({ username, password, auth }: User, x: XCon) => {
+  const { request: req } = x
   const token = req.headers["authorization"]?.split(" ")[1]
   try {
     const { username: u } = jwt.verify(token, process.env.SECRET_KEY)
     const user = users.find(({ username }) => u === username)
     if (user?.auth === "admin") {
       if (users.some(({ username: u }) => u === username)) {
-        x.statusCode = 409
-        return {
-          message: "username already exist",
-        }
+        return x.error(409, "username already exist")
       } else {
         users.push({ username, password, auth })
         return {
@@ -64,20 +62,14 @@ export const add = ({ username, password, auth }: User, x: XParam) => {
         }
       }
     } else {
-      x.statusCode = 403
-      return {
-        message: "you don't have permission to add user",
-      }
+      return x.error(403, "you don't have permission to add user")
     }
   } catch (e) {
-    x.statusCode = 401
-    return {
-      message: "not authorized",
-    }
+    return x.error(401, "not authorized")
   }
 }
 export function greet() {
-  return "hi"
+  return { msg: "hi" }
 }
 export function manipulateRuntimeIndex({ action }: { action: string }) {
   switch (action) {
@@ -99,11 +91,17 @@ export function manipulateRuntimeIndex({ action }: { action: string }) {
       `,
         "utf-8"
       )
-      return "created"
+      return { msg: "created" }
     case "delete":
       try {
         unlinkSync(join(process.cwd(), "public/runtime/index.html"))
       } catch (e) {}
-      return "deleted"
+      return { msg: "deleted" }
   }
+}
+const apiStr = (msg = "hello there") => `export function sayHi() {
+  return { msg: "${msg}" }
+}`
+export function changeApiAtRuttime({ msg }: { msg: string }) {
+  writeFileSync(join(process.cwd(), "./api/greet.ts"), apiStr(msg), "utf-8")
 }

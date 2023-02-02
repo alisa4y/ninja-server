@@ -24,10 +24,12 @@ window.addEventListener("load", () => {
         },
       }
     )
-      .then(r => r.json())
       .then(({ message }) => {
         if (messageElm) messageElm.textContent = message
         else console.warn("couldn't find message element")
+      })
+      .catch(({ message }) => {
+        if (messageElm) messageElm.textContent = message
       })
   })
 })

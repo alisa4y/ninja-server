@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.startServer = void 0;
+exports.XCon = exports.startServer = void 0;
 const fs_1 = require("fs");
 const promises_1 = require("fs/promises");
 const http_1 = require("http");
@@ -16,7 +16,19 @@ const querystring_1 = __importDefault(require("querystring"));
 const typescript_1 = __importDefault(require("typescript"));
 const jsxpiler_1 = require("jsxpiler");
 const bafu_1 = require("bafu");
+const pirates_1 = require("pirates");
 // import { minify } from "html-minifier-terser"
+const tsJsxOptions = {
+    module: typescript_1.default.ModuleKind.Node16,
+    removeComments: true,
+    jsx: typescript_1.default.JsxEmit.Preserve,
+    esModuleInterop: true,
+};
+const transpileTs = (0, bafu_1.aim)(typescript_1.default.transpile, tsJsxOptions);
+const transpileTsx = (0, bafu_1.$C)(jsxpiler_1.transpileJSX, transpileTs);
+(0, pirates_1.addHook)(code => transpileTs(code), { ext: ".ts" });
+(0, pirates_1.addHook)(code => (0, jsxpiler_1.transpileJSX)(code), { ext: ".jsx" });
+(0, pirates_1.addHook)(code => transpileTsx(code), { ext: ".tsx" });
 let g_config;
 const configFileName = "server.config.js";
 const projectConfigFilePath = (0, path_1.join)(process.cwd(), configFileName);
@@ -112,6 +124,21 @@ function stripUrl(url) {
         return url.slice(0, index);
     return url;
 }
+class XCon {
+    request;
+    headers;
+    statusCode;
+    constructor(request, headers, statusCode) {
+        this.request = request;
+        this.headers = headers;
+        this.statusCode = statusCode;
+    }
+    error(code, message) {
+        this.statusCode = code;
+        return message;
+    }
+}
+exports.XCon = XCon;
 async function getParams(req) {
     const { url, method } = req;
     if (bodyMethod.includes(method)) {
@@ -144,25 +171,26 @@ async function handleRequest(req, res) {
             res.writeHead(400, { "Content-Type": "text/plain" });
             return res.end(e.message);
         }
-        let data;
-        const exParam = { req, headers: {}, statusCode: 200 };
+        let ret;
+        const xc = new XCon(req, {}, 200);
         try {
-            data = await api.get(stripUrl(url))(paramObj, exParam);
+            ret = await api.get(stripUrl(url))(paramObj, xc);
         }
         catch (e) {
             console.warn(e);
-            exParam.statusCode = 500;
-            data = "something went wrong";
+            xc.statusCode = 500;
+            ret = "something went wrong";
         }
-        if (data === null)
-            data = "";
+        ret ??= "";
+        const data = Buffer.from(typeof ret === "string" ? ret : JSON.stringify(ret));
         end({
             headers: {
-                "Content-Type": typeof data === "string" ? "text/plain" : "application/json",
-                ...exParam.headers,
+                "Content-Type": typeof ret === "string" ? "text/plain" : "application/json",
+                "Content-Length": data.length,
+                ...xc.headers,
             },
-            data: typeof data === "string" ? data : JSON.stringify(data),
-            statusCode: exParam.statusCode,
+            data,
+            statusCode: xc.statusCode,
         });
     }
     else {
@@ -177,12 +205,6 @@ async function setup(publicDir) {
         (0, fs_1.mkdirSync)(publicDir);
         const wdPath = (0, path_1.join)(publicDir, "home");
         (0, fs_1.mkdirSync)(wdPath);
-        // const homePath = join(__dirname, "../public/home")
-        // const files = readdirSync(homePath)
-        // files.forEach(f => {
-        //   const data = readFileSync(join(homePath, f))
-        //   writeFileSync(join(wdPath, f), data)
-        // })
     }
     await setupSiteFiles(publicDir);
     site.set("/", site.get(g_config.defaultFile));
@@ -219,7 +241,9 @@ async function setupSiteFile(path, ext, url) {
             impundledFiles.add(path);
             setCounter("inc");
             return await (0, bundlex_1.impundler)(path, { watch: g_config.watch }, async (str) => {
-                urlObj.data = Buffer.from(str);
+                const data = Buffer.from(str);
+                urlObj.data = data;
+                urlObj.headers["Content-Length"] = data.length;
                 setCounter("dec");
             });
         }
@@ -239,33 +263,36 @@ async function setupSiteFile(path, ext, url) {
 }
 const jsxPlugin = {
     ".jsx": (code) => (0, jsxpiler_1.transpileJSX)(code),
-    ".tsx": (code) => (0, jsxpiler_1.transpileJSX)(typescript_1.default.transpile(code, {
-        module: typescript_1.default.ModuleKind.Node16,
-        removeComments: true,
-        jsx: typescript_1.default.JsxEmit.Preserve,
-        esModuleInterop: true,
-    })),
+    ".tsx": (code) => transpileTs(code),
     ".svg": (code) => `export default \`${code}\``,
+};
+const onFileInvalidated = (filename) => {
+    delete require.cache[require.resolve(filename)];
 };
 function handleJSX(filePath, url) {
     url = url.slice(0, -4) + ".html";
     impundledFiles.add(filePath);
     setCounter("inc");
-    (0, bundlex_1.impundler)(filePath, { watch: g_config.watch, plugins: jsxPlugin }, async (result, bundle) => {
-        const { index } = eval(result);
+    (0, bundlex_1.impundler)(filePath, {
+        watch: g_config.watch,
+        plugins: jsxPlugin,
+        onFileInvalidated,
+        bundleNodeModules: false,
+    }, async (result, bundle) => {
+        const { index } = require(filePath);
         if (index === undefined) {
             return bundle.unhandle();
         }
         if (index.length === 0) {
-            let file = Buffer.from("<!DOCTYPE html>" + index());
+            let file = Buffer.from("<!DOCTYPE html>" + (await index()));
             setSiteFile(url, Buffer.from(handleHtmlFile(file, url)));
         }
         else {
-            const toHtml = (params, x) => {
+            const toHtml = async (params, x) => {
                 x.headers = {
                     "Content-Type": "text/html",
                 };
-                return handleHtmlFile(Buffer.from("<!DOCTYPE html>" + index(params, x)), url);
+                return handleHtmlFile(Buffer.from("<!DOCTYPE html>" + (await index(params, x))), url);
             };
             api.set(url, toHtml);
             handleIndexHtml(url, toHtml, api);
@@ -278,7 +305,7 @@ function setSiteFile(url, data, headers = {}) {
     site.set(url, {
         headers: {
             "Content-Type": contentType,
-            // "Content-Length": data.length,
+            "Content-Length": data.length,
             ...headers,
         },
         data,
@@ -431,10 +458,10 @@ async function setApiFolder(dir, pre = "/") {
 }
 function setApi(path, pre) {
     impundledFiles.add(path);
-    return (0, bundlex_1.impundler)(path, { watch: g_config.watch, bundleNodeModules: false }, async (code) => {
+    return (0, bundlex_1.impundler)(path, { watch: g_config.watch, bundleNodeModules: false, onFileInvalidated }, async () => {
         setCounter("inc");
         try {
-            const oApi = eval(code);
+            const oApi = require(path);
             for (const name in oApi)
                 api.set(pre + name, oApi[name]);
             await genFile(path, oApi);
@@ -463,15 +490,20 @@ async function genFile(filePath, api) {
     await (0, promises_1.writeFile)((0, path_1.join)(clientApiFolderPath, filePath.slice(apiFolderPath.length, -3) + apiExt), ret);
 }
 async function generateClientApiFileJS(filePath, api) {
+    const apiPath = filePath.slice(apiFolderPath.length, -3).replaceAll("\\", "/");
     return `module.exports = {
     ${Object.keys(api)
-        .map(name => `${name}: (data, options={}) => {
-      return fetch("${filePath.slice(0, -3)}", {
-        method: "POST",
-        body: JSON.stringify(data),
-        ...options
+        .map(name => {
+        const ln0 = api[name].length === 0;
+        return `${name}: (${ln0 ? "" : "data, "}options={}) => {
+      return fetch("${apiPath}/${name}"${ln0
+            ? ", options"
+            : `, {method: "POST",body: JSON.stringify(data),...options}`}).then(async res => {
+        if (res.ok) return await res.json()
+        else throw new Error(await res.text())
       })
-    }`)
+    }`;
+    })
         .join()}
   }`;
 }
@@ -480,23 +512,20 @@ async function generateClientApiFileTS(filePath, api) {
     return `import * as __oApi from "../api${apiPath}"\n
     ${Object.keys(api)
         .filter(name => name !== "__esModule")
-        .map(name => `export function ${name} (${api[name].length === 0
-        ? ""
-        : `data:Parameters<typeof __oApi.${name}>[0], `}options:RequestInit={}) {
+        .map(name => {
+        const ln0 = api[name].length === 0;
+        return `export function ${name} (${ln0 ? "" : `data:Parameters<typeof __oApi.${name}>[0], `}options:RequestInit={}) {
   type ObjRetType = Extract<Awaited<ReturnType<typeof __oApi.${name}>>, Record<any, any>>
-  type RetType =  ObjRetType extends never 
-    ? Omit<Response, "json"> & {
-      json: () => Promise<never>
-    }
-    : Omit<Response, "json"> & {
-        json: () => Promise<ObjRetType>
-      }
   return fetch("${apiPath}/${name}"
-    ${api[name].length === 0
-        ? ", options"
-        : `, {method: "POST",body: JSON.stringify(data),...options}`}
-    ) as Promise<RetType>
-}`)
+    ${ln0
+            ? ", options"
+            : `, {method: "POST",body: JSON.stringify(data),...options}`}
+  ).then(async res => {
+    if (res.ok) return await res.json() as ObjRetType
+    else throw new Error(await res.text())
+  })
+}`;
+    })
         .join("\n")}
   `;
 }

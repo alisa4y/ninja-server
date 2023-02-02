@@ -17,8 +17,21 @@ import { URL } from "url"
 import querystring from "querystring"
 import ts from "typescript"
 import { transpileJSX } from "jsxpiler"
-import { curry } from "bafu"
+import { $C, aim, curry } from "bafu"
+import { addHook } from "pirates"
 // import { minify } from "html-minifier-terser"
+
+const tsJsxOptions = {
+  module: ts.ModuleKind.Node16,
+  removeComments: true,
+  jsx: ts.JsxEmit.Preserve,
+  esModuleInterop: true,
+}
+const transpileTs = aim(ts.transpile, tsJsxOptions as ts.CompilerOptions)
+const transpileTsx = $C(transpileJSX, transpileTs)
+addHook(code => transpileTs(code), { ext: ".ts" })
+addHook(code => transpileJSX(code), { ext: ".jsx" })
+addHook(code => transpileTsx(code), { ext: ".tsx" })
 
 let g_config: {
   defaultFile: string
@@ -54,7 +67,7 @@ try {
 const apiExt = g_config.apiExtension
 g_config.defaultFile = joinUrl(g_config.defaultFile || "index.html")
 
-type WebPageI = { headers: any; data: Buffer }
+type WebPageI = { headers: any; data: Buffer; statusCode?: number }
 const site: Map<string, WebPageI> = new Map()
 const api: Map<string, any> = new Map()
 
@@ -134,10 +147,16 @@ function stripUrl(url: string) {
   if (index > 0) return url.slice(0, index)
   return url
 }
-export type XParam = {
-  req: IncomingMessage
-  headers: Record<string, any>
-  statusCode: number
+export class XCon {
+  constructor(
+    public request: IncomingMessage,
+    public headers: Record<string, any>,
+    public statusCode: number
+  ) {}
+  error(code: number, message: string) {
+    this.statusCode = code
+    return message
+  }
 }
 async function getParams(req: InstanceType<typeof IncomingMessage>) {
   const { url, method } = req
@@ -148,7 +167,10 @@ async function getParams(req: InstanceType<typeof IncomingMessage>) {
     return querystring.parse(u.searchParams.toString())
   }
 }
-function respond(res: ServerResponse, result: any) {
+function respond(
+  res: ServerResponse,
+  result: { headers: Record<string, any>; data: Buffer; statusCode?: number }
+) {
   const { headers, data, statusCode = 200 } = result
   res.writeHead(statusCode, headers)
   res.end(data)
@@ -171,24 +193,28 @@ async function handleRequest(
       res.writeHead(400, { "Content-Type": "text/plain" })
       return res.end(e.message)
     }
-    let data: string
-    const exParam: XParam = { req, headers: {}, statusCode: 200 }
+    let ret: string
+    const xc = new XCon(req, {}, 200)
     try {
-      data = await api.get(stripUrl(url))(paramObj, exParam)
+      ret = await api.get(stripUrl(url))(paramObj, xc)
     } catch (e) {
       console.warn(e)
-      exParam.statusCode = 500
-      data = "something went wrong"
+      xc.statusCode = 500
+      ret = "something went wrong"
     }
-    if (data === null) data = ""
+    ret ??= ""
+    const data = Buffer.from(
+      typeof ret === "string" ? ret : JSON.stringify(ret)
+    )
     end({
       headers: {
         "Content-Type":
-          typeof data === "string" ? "text/plain" : "application/json",
-        ...exParam.headers,
+          typeof ret === "string" ? "text/plain" : "application/json",
+        "Content-Length": data.length,
+        ...xc.headers,
       },
-      data: typeof data === "string" ? data : JSON.stringify(data),
-      statusCode: exParam.statusCode,
+      data,
+      statusCode: xc.statusCode,
     })
   } else {
     end(site.get(g_config.notFound) || nf)
@@ -201,12 +227,6 @@ async function setup(publicDir: string) {
     mkdirSync(publicDir)
     const wdPath = join(publicDir, "home")
     mkdirSync(wdPath)
-    // const homePath = join(__dirname, "../public/home")
-    // const files = readdirSync(homePath)
-    // files.forEach(f => {
-    //   const data = readFileSync(join(homePath, f))
-    //   writeFileSync(join(wdPath, f), data)
-    // })
   }
 
   await setupSiteFiles(publicDir)
@@ -248,7 +268,9 @@ async function setupSiteFile(path: string, ext: string, url: string) {
       impundledFiles.add(path)
       setCounter("inc")
       return await impundler(path, { watch: g_config.watch }, async str => {
-        urlObj.data = Buffer.from(str)
+        const data = Buffer.from(str)
+        urlObj.data = data
+        urlObj.headers["Content-Length"] = data.length
         setCounter("dec")
       })
     } else if (ext === ".jsx" || ext === ".tsx") {
@@ -263,16 +285,11 @@ async function setupSiteFile(path: string, ext: string, url: string) {
 }
 const jsxPlugin = {
   ".jsx": (code: string) => transpileJSX(code),
-  ".tsx": (code: string) =>
-    transpileJSX(
-      ts.transpile(code, {
-        module: ts.ModuleKind.Node16,
-        removeComments: true,
-        jsx: ts.JsxEmit.Preserve,
-        esModuleInterop: true,
-      })
-    ),
+  ".tsx": (code: string) => transpileTs(code),
   ".svg": (code: string) => `export default \`${code}\``,
+}
+const onFileInvalidated = (filename: string) => {
+  delete require.cache[require.resolve(filename)]
 }
 function handleJSX(filePath: string, url: string) {
   url = url.slice(0, -4) + ".html"
@@ -280,22 +297,27 @@ function handleJSX(filePath: string, url: string) {
   setCounter("inc")
   impundler(
     filePath,
-    { watch: g_config.watch, plugins: jsxPlugin },
+    {
+      watch: g_config.watch,
+      plugins: jsxPlugin,
+      onFileInvalidated,
+      bundleNodeModules: false,
+    },
     async (result, bundle) => {
-      const { index }: { index: Fn } = eval(result)
+      const { index }: { index: Fn } = require(filePath)
       if (index === undefined) {
         return bundle.unhandle()
       }
       if (index.length === 0) {
-        let file = Buffer.from("<!DOCTYPE html>" + index())
+        let file = Buffer.from("<!DOCTYPE html>" + (await index()))
         setSiteFile(url, Buffer.from(handleHtmlFile(file, url)))
       } else {
-        const toHtml = (params: any, x: any) => {
+        const toHtml = async (params: any, x: any) => {
           x.headers = {
             "Content-Type": "text/html",
           }
           return handleHtmlFile(
-            Buffer.from("<!DOCTYPE html>" + index(params, x)),
+            Buffer.from("<!DOCTYPE html>" + (await index(params, x))),
             url
           )
         }
@@ -312,7 +334,7 @@ function setSiteFile(url: string, data: Buffer, headers = {}) {
   site.set(url, {
     headers: {
       "Content-Type": contentType,
-      // "Content-Length": data.length,
+      "Content-Length": data.length,
       ...headers,
     },
     data,
@@ -467,15 +489,16 @@ async function setApiFolder(dir: string, pre = "/") {
     })
   )
 }
+
 function setApi(path: string, pre: string) {
   impundledFiles.add(path)
   return impundler(
     path,
-    { watch: g_config.watch, bundleNodeModules: false },
-    async code => {
+    { watch: g_config.watch, bundleNodeModules: false, onFileInvalidated },
+    async () => {
       setCounter("inc")
       try {
-        const oApi = eval(code)
+        const oApi = require(path)
         for (const name in oApi) api.set(pre + name, oApi[name])
         await genFile(path, oApi)
       } catch (e) {
@@ -511,17 +534,22 @@ async function generateClientApiFileJS(
   filePath: string,
   api: Record<string, any>
 ) {
+  const apiPath = filePath.slice(apiFolderPath.length, -3).replaceAll("\\", "/")
   return `module.exports = {
     ${Object.keys(api)
-      .map(
-        name => `${name}: (data, options={}) => {
-      return fetch("${filePath.slice(0, -3)}", {
-        method: "POST",
-        body: JSON.stringify(data),
-        ...options
+      .map(name => {
+        const ln0 = api[name].length === 0
+        return `${name}: (${ln0 ? "" : "data, "}options={}) => {
+      return fetch("${apiPath}/${name}"${
+          ln0
+            ? ", options"
+            : `, {method: "POST",body: JSON.stringify(data),...options}`
+        }).then(async res => {
+        if (res.ok) return await res.json()
+        else throw new Error(await res.text())
       })
     }`
-      )
+      })
       .join()}
   }`
 }
@@ -535,29 +563,25 @@ async function generateClientApiFileTS(
   return `import * as __oApi from "../api${apiPath}"\n
     ${Object.keys(api)
       .filter(name => name !== "__esModule")
-      .map(
-        name => `export function ${name} (${
-          api[name].length === 0
-            ? ""
-            : `data:Parameters<typeof __oApi.${name}>[0], `
+      .map(name => {
+        const ln0 = api[name].length === 0
+
+        return `export function ${name} (${
+          ln0 ? "" : `data:Parameters<typeof __oApi.${name}>[0], `
         }options:RequestInit={}) {
   type ObjRetType = Extract<Awaited<ReturnType<typeof __oApi.${name}>>, Record<any, any>>
-  type RetType =  ObjRetType extends never 
-    ? Omit<Response, "json"> & {
-      json: () => Promise<never>
-    }
-    : Omit<Response, "json"> & {
-        json: () => Promise<ObjRetType>
-      }
   return fetch("${apiPath}/${name}"
     ${
-      api[name].length === 0
+      ln0
         ? ", options"
         : `, {method: "POST",body: JSON.stringify(data),...options}`
     }
-    ) as Promise<RetType>
+  ).then(async res => {
+    if (res.ok) return await res.json() as ObjRetType
+    else throw new Error(await res.text())
+  })
 }`
-      )
+      })
       .join("\n")}
   `
 }

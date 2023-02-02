@@ -110,7 +110,7 @@ describe("parsing jsx ", () => {
     cy.get("body").should("have.css", "background-color", "rgb(199, 255, 199)")
   })
 })
-describe("can manipulate files at runtime", () => {
+describe("can frontend manipulate files at runtime", () => {
   it("can add file at runtime ", () => {
     cy.request("http://localhost:3000/api/manipulateRuntimeIndex?action=delete")
     cy.request({
@@ -128,5 +128,20 @@ describe("can manipulate files at runtime", () => {
         }
       })
     })
+  })
+})
+describe("can watch api ", () => {
+  before(() => {
+    cy.request("http://localhost:3000/api/changeApiAtRuttime?msg=hello%20there")
+  })
+  it("will evaluate new api at runtime and reload the page", () => {
+    cy.visit("http://localhost:3000/greet")
+    cy.wait(1000)
+    cy.contains("hello there")
+    cy.request("http://localhost:3000/api/changeApiAtRuttime?msg=hi%20ali")
+    cy.wait(1000)
+    cy.contains("hi ali")
+    cy.request("http://localhost:3000/api/changeApiAtRuttime?msg=hello%20there")
+    cy.contains("hello there")
   })
 })
