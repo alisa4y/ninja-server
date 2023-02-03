@@ -6,6 +6,7 @@ import {
   constants,
   readdirSync,
   FSWatcher,
+  accessSync,
 } from "fs"
 import { access, readFile, mkdir, writeFile, stat } from "fs/promises"
 import { createServer, IncomingMessage, ServerResponse } from "http"
@@ -55,15 +56,14 @@ let g_config: {
 const configFileName = "server.config.js"
 const projectConfigFilePath = join(process.cwd(), configFileName)
 try {
-  g_config = require(projectConfigFilePath)
+  accessSync(projectConfigFilePath)
 } catch (e) {
-  if (e.code === "ENOENT") {
-    const configFilePath = join(__dirname, "..", configFileName)
-    const configFile = readFileSync(configFilePath, "utf8")
-    writeFileSync(projectConfigFilePath, configFile)
-    g_config = require(projectConfigFilePath)
-  } else throw e
+  const configFilePath = join(__dirname, "..", configFileName)
+  const configFile = readFileSync(configFilePath, "utf8")
+  writeFileSync(projectConfigFilePath, configFile)
 }
+g_config = require(projectConfigFilePath)
+
 const apiExt = g_config.apiExtension
 g_config.defaultFile = joinUrl(g_config.defaultFile || "index.html")
 
