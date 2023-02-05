@@ -10,8 +10,6 @@
   },
   "include": [
     "src",
-    "public",
-    "public/greet",
-    "public/greet/index.tsx"
+    "public/**/*.tsx",
   ],
 }

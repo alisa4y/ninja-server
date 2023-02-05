@@ -1,6 +1,7 @@
-import { unlinkSync, writeFileSync } from "fs"
+import { writeFile, cp, rm, access } from "fs/promises"
 import { join } from "path"
 import { XCon } from "../src/index"
+import { aim } from "bafu"
 require("dotenv").config()
 const jwt = require("jsonwebtoken")
 type User = {
@@ -71,10 +72,10 @@ export const add = ({ username, password, auth }: User, x: XCon) => {
 export function greet() {
   return { msg: "hi" }
 }
-export function manipulateRuntimeIndex({ action }: { action: string }) {
+export async function manipulateRuntimeIndex({ action }: { action: string }) {
   switch (action) {
     case "create":
-      writeFileSync(
+      await writeFile(
         join(process.cwd(), "public/runtime/index.html"),
         `<!DOCTYPE html>
 <html lang="en">
@@ -94,7 +95,7 @@ export function manipulateRuntimeIndex({ action }: { action: string }) {
       return { msg: "created" }
     case "delete":
       try {
-        unlinkSync(join(process.cwd(), "public/runtime/index.html"))
+        rm(join(process.cwd(), "public/runtime/index.html"))
       } catch (e) {}
       return { msg: "deleted" }
   }
@@ -103,5 +104,65 @@ const apiStr = (msg = "hello there") => `export function sayHi() {
   return { msg: "${msg}" }
 }`
 export function changeApiAtRuttime({ msg }: { msg: string }) {
-  writeFileSync(join(process.cwd(), "./api/greet.ts"), apiStr(msg), "utf-8")
+  writeFile(join(process.cwd(), "./api/greet.ts"), apiStr(msg), "utf-8")
+}
+
+function manipulateFile(
+  action: "delete" | "copy",
+  srcPath: string,
+  destPath: string,
+  isFolder: boolean = false
+) {
+  switch (action) {
+    case "copy":
+      access(srcPath)
+        .then(() => {
+          cp(srcPath, destPath, isFolder ? { recursive: true } : undefined)
+        })
+        .catch(e => {})
+      break
+    case "delete":
+      access(destPath)
+        .then(() => {
+          rm(destPath, isFolder ? { recursive: true } : undefined)
+        })
+        .catch(e => {})
+      break
+  }
+}
+
+const apiFileFn = aim(
+  manipulateFile,
+  join(process.cwd(), "testFolder/b.ts"),
+  join(process.cwd(), "api/a/b.ts")
+)
+export function cmdApiFile({ action }: { action: "delete" | "copy" }) {
+  apiFileFn(action)
+}
+const apiFolderFn = aim(
+  manipulateFile,
+  join(process.cwd(), "testFolder/api/a"),
+  join(process.cwd(), "api/a"),
+  true
+)
+export function cmdApiFolder({ action }: { action: "delete" | "copy" }) {
+  apiFolderFn(action)
+}
+
+const pubFileFn = aim(
+  manipulateFile,
+  join(process.cwd(), "testFolder/index.html"),
+  join(process.cwd(), "public/pub/a/index.html")
+)
+export function cmdPubFile({ action }: { action: "delete" | "copy" }) {
+  pubFileFn(action)
+}
+const pubFolderFn = aim(
+  manipulateFile,
+  join(process.cwd(), "testFolder/pub"),
+  join(process.cwd(), "public/pub"),
+  true
+)
+export function cmdPubFolder({ action }: { action: "delete" | "copy" }) {
+  pubFolderFn(action)
 }

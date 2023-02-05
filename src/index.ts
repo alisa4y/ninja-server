@@ -1,18 +1,9 @@
-import {
-  watch,
-  readFileSync,
-  writeFileSync,
-  mkdirSync,
-  constants,
-  readdirSync,
-  FSWatcher,
-  accessSync,
-} from "fs"
-import { access, readFile, mkdir, writeFile, stat } from "fs/promises"
+import { watch, readFileSync, writeFileSync, FSWatcher, existsSync } from "fs"
+import { access, readFile, mkdir, writeFile, stat, readdir } from "fs/promises"
 import { createServer, IncomingMessage, ServerResponse } from "http"
 import { connection, server as webSocketServer } from "websocket"
-import { cell, debounce } from "vaco"
-import { join, extname, basename } from "path"
+import { cell, debounce, ox } from "vaco"
+import { join, extname, basename, dirname } from "path"
 import { closeAllBundles, impundler } from "bundlex"
 import { URL } from "url"
 import querystring from "querystring"
@@ -55,16 +46,12 @@ let g_config: {
 }
 const configFileName = "server.config.js"
 const projectConfigFilePath = join(process.cwd(), configFileName)
-try {
-  accessSync(projectConfigFilePath)
-} catch (e) {
+if (!existsSync(projectConfigFilePath)) {
   const configFilePath = join(__dirname, "..", configFileName)
   const configFile = readFileSync(configFilePath, "utf8")
   writeFileSync(projectConfigFilePath, configFile)
 }
 g_config = require(projectConfigFilePath)
-
-const apiExt = g_config.apiExtension
 g_config.defaultFile = joinUrl(g_config.defaultFile || "index.html")
 
 type WebPageI = { headers: any; data: Buffer; statusCode?: number }
@@ -221,26 +208,25 @@ async function handleRequest(
   }
 }
 async function setup(publicDir: string) {
-  try {
-    await access(publicDir, constants.F_OK)
-  } catch (err) {
-    mkdirSync(publicDir)
-    const wdPath = join(publicDir, "home")
-    mkdirSync(wdPath)
+  if (!existsSync(publicDir)) {
+    await mkdir(join(publicDir, "home"), { recursive: true })
+  } else {
+    await setupSiteFiles(publicDir)
+    site.set("/", site.get(g_config.defaultFile))
   }
-
-  await setupSiteFiles(publicDir)
-  site.set("/", site.get(g_config.defaultFile))
 }
-function setupSiteFiles(dir: string, url = "/"): Promise<any> {
+async function setupSiteFiles(dir: string, url = "/"): Promise<any> {
+  const files = await readdir(dir)
   return Promise.allSettled(
-    readdirSync(dir).map(async file => {
-      const path = join(dir, file)
+    files.map(async file => {
+      const filePath = join(dir, file)
       const ext = extname(file)
-      const fileUrl = joinUrl(url, file)
-      if ((await stat(path)).isDirectory()) return setupSiteFiles(path, fileUrl)
+      const urlPath = joinUrl(url, file)
+
+      if ((await stat(filePath)).isDirectory())
+        return setupSiteFiles(filePath, urlPath)
       else if (!g_config.skipExtensions?.includes(ext)) {
-        return setupSiteFile(path, ext, fileUrl)
+        return setupSiteFile(filePath, ext, urlPath)
       }
     })
   )
@@ -267,12 +253,19 @@ async function setupSiteFile(path: string, ext: string, url: string) {
       const urlObj = site.get(url)
       impundledFiles.add(path)
       setCounter("inc")
-      return await impundler(path, { watch: g_config.watch }, async str => {
-        const data = Buffer.from(str)
-        urlObj.data = data
-        urlObj.headers["Content-Length"] = data.length
-        setCounter("dec")
-      })
+      return await impundler(
+        path,
+        {
+          watch: g_config.watch,
+          onFileDelete: () => impundledFiles.delete(path),
+        },
+        async str => {
+          const data = Buffer.from(str)
+          urlObj.data = data
+          urlObj.headers["Content-Length"] = data.length
+          setCounter("dec")
+        }
+      )
     } else if (ext === ".jsx" || ext === ".tsx") {
       return handleJSX(path, url)
     } else file = await readFile(path)
@@ -280,7 +273,7 @@ async function setupSiteFile(path: string, ext: string, url: string) {
       setSiteFile(url, Buffer.from(handleHtmlFile(file, url)))
     else setSiteFile(url, file)
   } catch (e) {
-    console.log(e)
+    handleError(e, "failed at evaluating pbulic file: " + path)
   }
 }
 const jsxPlugin = {
@@ -291,8 +284,10 @@ const jsxPlugin = {
 const onFileInvalidated = (filename: string) => {
   delete require.cache[require.resolve(filename)]
 }
+const docType = "<!DOCTYPE html>"
+const generatedApi: Set<string> = new Set()
 function handleJSX(filePath: string, url: string) {
-  url = url.slice(0, -4) + ".html"
+  const htmlUrl = url.slice(0, -4) + ".html"
   impundledFiles.add(filePath)
   setCounter("inc")
   impundler(
@@ -301,6 +296,7 @@ function handleJSX(filePath: string, url: string) {
       watch: g_config.watch,
       plugins: jsxPlugin,
       onFileInvalidated,
+      onFileDelete: () => impundledFiles.delete(filePath),
       bundleNodeModules: false,
     },
     async (result, bundle) => {
@@ -309,20 +305,21 @@ function handleJSX(filePath: string, url: string) {
         return bundle.unhandle()
       }
       if (index.length === 0) {
-        let file = Buffer.from("<!DOCTYPE html>" + (await index()))
-        setSiteFile(url, Buffer.from(handleHtmlFile(file, url)))
+        let file = Buffer.from(docType + (await index()))
+        setSiteFile(htmlUrl, Buffer.from(handleHtmlFile(file, htmlUrl)))
       } else {
         const toHtml = async (params: any, x: any) => {
           x.headers = {
             "Content-Type": "text/html",
           }
           return handleHtmlFile(
-            Buffer.from("<!DOCTYPE html>" + (await index(params, x))),
-            url
+            Buffer.from(docType + (await index(params, x))),
+            htmlUrl
           )
         }
-        api.set(url, toHtml)
-        handleIndexHtml(url, toHtml, api)
+        generatedApi.add(htmlUrl)
+        api.set(htmlUrl, toHtml)
+        handleIndexHtml(htmlUrl, toHtml, api)
       }
       setCounter("dec")
     }
@@ -390,38 +387,55 @@ function watchStructure() {
       connections.delete(con)
     })
   })
-  const handledFiles: Map<string, ReturnType<typeof debounce<Fn>>> = new Map()
-  const watcher = watch(
+  const watcher = watchDir(
     publicDir,
-    { recursive: true },
-    async (eventType, filename) => {
-      const filePath = join(publicDir, filename)
-      const ext = extname(filename)
-      if (ext === "" || impundledFiles.has(filePath)) return
-      else if (handledFiles.has(filename)) return handledFiles.get(filename)()
-
-      if (eventType === "rename") {
-        try {
-          await access(filePath)
-        } catch (e) {
-          removeUrl(joinUrl(filename))
-          return setCounter("dec")
-        }
-      }
-      setTimeout(() => {
-        handledFiles.clear()
-      }, 300)
-      const d = debounce(async () => {
-        const isLoad = g_config.reloadExtRgx?.test(ext)
-        isLoad && setCounter("inc")
-        await setupSiteFile(filePath, ext, joinUrl(filename))
-        isLoad && setCounter("dec")
-      }, 100)
-      d()
-      handledFiles.set(filename, d)
-    }
+    async (urlPath, ext, filePath) => {
+      const isLoad = g_config.reloadExtRgx?.test(ext)
+      isLoad && setCounter("inc")
+      await setupSiteFile(filePath, ext, urlPath)
+      isLoad && setCounter("dec")
+    },
+    async (urlPath, ext) => {
+      if (ext === "") removeUrls(urlPath + "/")
+      else removeUrl(urlPath)
+      setCounter("dec")
+    },
+    impundledFiles
   )
   jsWatchers.push(watcher)
+}
+type HandleFn = (urlPath: string, ext: string, filePath: string) => void
+function watchDir(
+  dir: string,
+  onChange: HandleFn,
+  onDelete: HandleFn,
+  impundledFiles: Set<string>
+) {
+  const handledFiles: Map<string, (fn: HandleFn) => void> = new Map()
+  const gh = aim(getHandler, onChange, onDelete)
+  return watch(dir, { recursive: true }, (eventType, filename) => {
+    const ext = extname(filename)
+    if (handledFiles.has(filename))
+      return handledFiles.get(filename)(gh(eventType, ext))
+
+    const filePath = join(dir, filename)
+    const urlPath = joinUrl(filename)
+
+    if (impundledFiles.has(filePath) || (eventType === "change" && ext === ""))
+      return
+
+    const d = debounce((fn: HandleFn) => fn(urlPath, ext, filePath), 100)
+    d(eventType === "change" ? onChange : onDelete)
+    handledFiles.set(filename, d)
+  })
+}
+function getHandler(
+  eventType: string,
+  ext: string,
+  onChange: HandleFn,
+  onDelete: HandleFn
+) {
+  return eventType === "rename" ? onDelete : ext === "" ? ox : onChange
 }
 const indexExts = /\.[jt]sx$/
 async function removeUrl(url: string) {
@@ -433,8 +447,17 @@ async function removeUrl(url: string) {
   }
 }
 function removeSiteUrl(url: string, source: Map<string, any>) {
-  source.set(url, source.get(g_config.notFound) || nf)
-  handleIndexHtml(url, source.get(g_config.notFound) || nf, source)
+  source.set(url, site.get(g_config.notFound) || nf)
+  handleIndexHtml(url, site.get(g_config.notFound) || nf, source)
+}
+function removeUrls(domainUrl: string) {
+  site.forEach((v, url) => url.startsWith(domainUrl) && site.delete(url))
+  generatedApi.forEach(url => {
+    if (url.startsWith(domainUrl)) {
+      removeSiteUrl(url, api)
+      generatedApi.delete(url)
+    }
+  })
 }
 function joinUrl(...args: string[]) {
   return (
@@ -463,55 +486,90 @@ function validateLinks(data: string, baseUrl: string) {
   )
 }
 const apiFolderPath = join(process.cwd(), "./api")
+const apiImpundleredFiles: Set<string> = new Set()
+const clientApiFolderPath = join(process.cwd(), "./clientApi")
 async function initApi() {
-  try {
-    await access(apiFolderPath)
-  } catch (e) {
+  if (!existsSync(apiFolderPath)) {
     return console.log("there is no api folder")
   }
-  await setApiFolder(apiFolderPath)
-}
-const clientApiFolderPath = join(process.cwd(), "./clientApi")
-async function setApiFolder(dir: string, pre = "/") {
-  try {
-    await access(clientApiFolderPath)
-  } catch (e) {
+  if (!existsSync(clientApiFolderPath)) {
     await mkdir(clientApiFolderPath)
   }
-  await Promise.allSettled(
-    readdirSync(dir).map(async file => {
-      const path = join(dir, file)
-      const ext = extname(file)
-      if (ext === apiExt) {
-        return setApi(path, pre + file.slice(0, -3) + "/")
-      } else if ((await stat(path)).isDirectory())
-        return setApiFolder(path, pre + file + "/")
-    })
+  await setApiFolder(apiFolderPath)
+  watchDir(
+    apiFolderPath,
+    async (urlPath, ext, filePath) => {
+      if (ext === g_config.apiExtension) {
+        setCounter("inc")
+        await setApi(filePath, urlPath.slice(0, -3) + "/")
+        setCounter("dec")
+      }
+    },
+    async (urlPath, ext) => {
+      const domainUrl = (ext === "" ? urlPath : urlPath.slice(0, -3)) + "/"
+      api.forEach((v, url) => url.startsWith(domainUrl) && api.delete(url))
+    },
+    apiImpundleredFiles
   )
 }
-
+async function setApiFolder(dir: string, pre = "/") {
+  await readdir(dir).then(files =>
+    Promise.all(
+      files.map(async file => {
+        const path = join(dir, file)
+        const ext = extname(file)
+        if (ext === g_config.apiExtension) {
+          return setApi(path, pre + file.slice(0, -3) + "/")
+        } else if ((await stat(path)).isDirectory())
+          return setApiFolder(path, pre + file + "/")
+      })
+    )
+  )
+}
 function setApi(path: string, pre: string) {
-  impundledFiles.add(path)
+  apiImpundleredFiles.add(path)
   return impundler(
     path,
-    { watch: g_config.watch, bundleNodeModules: false, onFileInvalidated },
-    async () => {
+    {
+      watch: g_config.watch,
+      bundleNodeModules: false,
+      onFileInvalidated,
+      onFileDelete: () => apiImpundleredFiles.delete(path),
+    },
+    () => {
       setCounter("inc")
       try {
         const oApi = require(path)
-        for (const name in oApi) api.set(pre + name, oApi[name])
-        await genFile(path, oApi)
+        setApiExports(oApi, pre)
+        genFile(path, oApi).catch(e =>
+          handleError(e, "couldn't generate clientApi for api at path: " + path)
+        )
       } catch (e) {
-        console.warn("failed to evaluate api at: " + path)
-        if (g_config.watch) {
-          console.warn(e)
-        } else throw e
+        handleError(e, "failed to evaluate api at: " + path)
       }
       setCounter("dec")
     }
   )
 }
-
+function handleError(e: Error, msg?: string) {
+  if (msg) console.warn(msg)
+  if (g_config.watch) {
+    console.warn(e)
+  } else throw e
+}
+function setApiExports(oApi: Record<string, any>, pre: string) {
+  for (const name in oApi) {
+    const v = oApi[name]
+    switch (typeof v) {
+      case "object":
+        setApiExports(v, `${pre}/${name}/`)
+        break
+      case "function":
+        api.set(pre + name, oApi[name])
+        break
+    }
+  }
+}
 async function genFile(filePath: string, api: Record<string, any>) {
   let ret
   switch (extname(filePath)) {
@@ -522,55 +580,98 @@ async function genFile(filePath: string, api: Record<string, any>) {
       ret = await generateClientApiFileTS(filePath, api)
       break
   }
-  await writeFile(
-    join(
-      clientApiFolderPath,
-      filePath.slice(apiFolderPath.length, -3) + apiExt
-    ),
-    ret
+  const cPath = join(
+    clientApiFolderPath,
+    filePath.slice(apiFolderPath.length, -3) + g_config.apiExtension
   )
+  await mkdir(dirname(cPath), { recursive: true })
+  await writeFile(cPath, ret)
 }
 async function generateClientApiFileJS(
   filePath: string,
   api: Record<string, any>
 ) {
   const apiPath = filePath.slice(apiFolderPath.length, -3).replaceAll("\\", "/")
-  return `module.exports = {
-    ${Object.keys(api)
-      .map(name => {
-        const ln0 = api[name].length === 0
-        return `${name}: (${ln0 ? "" : "data, "}options={}) => {
-      return fetch("${apiPath}/${name}"${
-          ln0
-            ? ", options"
-            : `, {method: "POST",body: JSON.stringify(data),...options}`
-        }).then(async res => {
-        if (res.ok) return await res.json()
-        else throw new Error(await res.text())
-      })
-    }`
-      })
-      .join()}
-  }`
+  return `module.exports = ${buildClientApiFileJS(apiPath, api)}`
 }
-
+function buildClientApiFileJS(
+  apiPath: string,
+  api: Record<string, any>
+): string {
+  const str = Object.keys(api)
+    .map(name => {
+      const v = api[name]
+      switch (typeof v) {
+        case "object":
+          return name + ": " + buildClientApiFileJS(`${apiPath}/${name}`, v)
+        case "function":
+          const ln0 = v.length === 0
+          return `${name}: (${ln0 ? "" : "data, "}options={}) => {
+              return fetch("${apiPath}/${name}"${
+            ln0
+              ? ", options"
+              : `, {method: "POST",body: JSON.stringify(data),...options}`
+          }).then(async res => {
+                if (res.ok) return await res.json()
+                else throw new Error(await res.text())
+              })
+            }`
+      }
+    })
+    .join()
+  return `{${str}}`
+}
 async function generateClientApiFileTS(
   filePath: string,
   api: Record<string, any>
 ) {
   const apiPath = filePath.slice(apiFolderPath.length, -3).replaceAll("\\", "/")
-
   return `import * as __oApi from "../api${apiPath}"\n
     ${Object.keys(api)
       .filter(name => name !== "__esModule")
       .map(name => {
-        const ln0 = api[name].length === 0
-
-        return `export function ${name} (${
-          ln0 ? "" : `data:Parameters<typeof __oApi.${name}>[0], `
-        }options:RequestInit={}) {
-  type ObjRetType = Extract<Awaited<ReturnType<typeof __oApi.${name}>>, Record<any, any>>
-  return fetch("${apiPath}/${name}"
+        const v = api[name]
+        let ret: string
+        switch (typeof v) {
+          case "object":
+            ret = clientApiFileTsObject(apiPath, [name], v)
+            break
+          case "function":
+            ret = clientApiTsFunction(apiPath, [name], v.length === 0)
+            break
+        }
+        return `export const ${name} = ${ret}`
+      })
+      .join("\n")}
+  `
+}
+function clientApiFileTsObject(
+  apiPath: string,
+  keys: string[],
+  api: Record<string, any>
+): string {
+  const result = Object.keys(api)
+    .map(name => {
+      const v = api[name]
+      let ret = ""
+      switch (typeof v) {
+        case "object":
+          ret = clientApiFileTsObject(apiPath, [...keys, name], v)
+        case "function":
+          ret = clientApiTsFunction(apiPath, [...keys, name], v.length === 0)
+      }
+      return name + ": " + ret
+    })
+    .join()
+  return `{${result}}`
+}
+function clientApiTsFunction(apiPath: string, keys: string[], ln0: boolean) {
+  const objPath = keys.map(k => `["${k}"]`).join("")
+  return `function (${
+    ln0 ? "" : `data:Parameters<typeof __oApi${objPath}>[0], `
+  }options:RequestInit={}) {
+  type ObjRetType = Extract<Awaited<ReturnType<typeof __oApi${objPath}>>, Record<any, any>>
+  return fetch("${apiPath}/${keys.join("/")}"
     ${
       ln0
         ? ", options"
@@ -581,11 +682,7 @@ async function generateClientApiFileTS(
     else throw new Error(await res.text())
   })
 }`
-      })
-      .join("\n")}
-  `
 }
-
 startServer()
 
 function terminate() {
@@ -600,9 +697,11 @@ process.on("SIGINT", () => process.exit())
 process.on("SIGTERM", () => process.exit())
 process.on("exit", terminate)
 
+const skipErrosCode = ["EPERM"] // since window will log this error when watched file is deleted for clearity it won't show it
 process.on("uncaughtException", e => {
-  console.warn(e)
+  if (skipErrosCode.includes((e as any).code)) return
+  console.warn("uncaughtException: ", e)
 })
 process.on("unhandledRejection", e => {
-  console.warn(e)
+  console.warn("unhandledRejection: ", e)
 })

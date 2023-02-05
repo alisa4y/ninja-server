@@ -8,7 +8,12 @@ export function index() {
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>greet</title>
       </head>
-      <body>{sayHi().msg} </body>
+      <body>
+        <h1>{sayHi().msg}</h1>
+        <h2 id="Mr"></h2>
+        <h2 id="Mrs"></h2>
+        <script src="./index.ts"></script>
+      </body>
     </html>
   )
 }

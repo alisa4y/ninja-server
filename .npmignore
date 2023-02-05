@@ -4,5 +4,6 @@ cypress
 public
 src
 .env
+testFolder
 cypress.config.ts
 tsconfig.json

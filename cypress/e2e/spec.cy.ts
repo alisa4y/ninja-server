@@ -1,3 +1,5 @@
+const waitTime = 500
+
 describe("server structure", () => {
   it("provides default file field in configuration as main page when entering url of website", () => {
     cy.visit("localhost:3000")
@@ -96,6 +98,11 @@ describe("can takes api folder and create api and also linking straight forwardl
     cy.get("form button#get").click()
     cy.get("div#message").contains("logged in successfully")
   })
+  it("api files can exports object too which the leafs(end points) of it are functions", () => {
+    cy.visit("localhost:3000/greet")
+    cy.contains("greetings Mr. safari")
+    cy.contains("greetings Mrs. rui")
+  })
 })
 
 describe("parsing jsx ", () => {
@@ -110,9 +117,28 @@ describe("parsing jsx ", () => {
     cy.get("body").should("have.css", "background-color", "rgb(199, 255, 199)")
   })
 })
-describe("can frontend manipulate files at runtime", () => {
-  it("can add file at runtime ", () => {
+const pubFiles = ["", "/index.html", "/a.js", "/a.css"]
+describe("can watch files at runtime in public folder", () => {
+  it("can add folder at runtime in public folder", () => {
+    cy.request("http://localhost:3000/api/cmdPubFolder?action=delete")
+    cy.wait(200)
+    pubFiles.forEach(url => {
+      cy.request({
+        url: "http://localhost:3000/a/a" + url,
+        failOnStatusCode: false,
+      }).then(res => {
+        expect(res.status).equal(404)
+      })
+    })
+    cy.request("http://localhost:3000/api/cmdPubFolder?action=copy")
+    cy.wait(200)
+    pubFiles.forEach(url => {
+      cy.request("http://localhost:3000/pub/a/a" + url)
+    })
+  })
+  it("can add file at runtime in public folder", () => {
     cy.request("http://localhost:3000/api/manipulateRuntimeIndex?action=delete")
+    cy.wait(100)
     cy.request({
       failOnStatusCode: false,
       url: "http://localhost:3000/runtime",
@@ -128,20 +154,101 @@ describe("can frontend manipulate files at runtime", () => {
         }
       })
     })
+    cy.request("http://localhost:3000/api/cmdPubFile?action=delete")
+    cy.wait(200)
+    cy.request({
+      failOnStatusCode: false,
+      url: "http://localhost:3000/pub/a",
+    })
+    cy.request("http://localhost:3000/api/cmdPubFile?action=copy")
+    cy.wait(200)
+    cy.request("http://localhost:3000/pub/a")
+  })
+
+  it("can detect folder deletion in public folder at runtime and all the urls of it will be gone", () => {
+    cy.request("http://localhost:3000/api/cmdPubFolder?action=delete")
+    cy.wait(200)
+    pubFiles.forEach(url => {
+      cy.request({
+        url: "http://localhost:3000/a/a" + url,
+        failOnStatusCode: false,
+      }).then(res => {
+        expect(res.status).equal(404)
+      })
+    })
+  })
+  it("can detect file deletion in public folder at runtime and its url will be gone", () => {
+    cy.request("http://localhost:3000/api/cmdPubFile?action=delete")
+    cy.wait(200)
+    cy.request({
+      failOnStatusCode: false,
+      url: "http://localhost:3000/pub/a",
+    })
   })
 })
 describe("can watch api ", () => {
-  before(() => {
-    cy.request("http://localhost:3000/api/changeApiAtRuttime?msg=hello%20there")
-  })
   it("will evaluate new api at runtime and reload the page", () => {
+    cy.request("http://localhost:3000/api/changeApiAtRuttime?msg=hello%20there")
+    cy.wait(waitTime)
     cy.visit("http://localhost:3000/greet")
-    cy.wait(1000)
+    cy.wait(waitTime)
     cy.contains("hello there")
     cy.request("http://localhost:3000/api/changeApiAtRuttime?msg=hi%20ali")
-    cy.wait(1000)
+    cy.wait(waitTime)
     cy.contains("hi ali")
     cy.request("http://localhost:3000/api/changeApiAtRuttime?msg=hello%20there")
     cy.contains("hello there")
+  })
+  it("can add folder api at run time and everything will be set", () => {
+    cy.request("http://localhost:3000/api/cmdApiFolder?action=delete")
+    cy.wait(waitTime)
+    cy.request({
+      url: "http://localhost:3000/a/a/a/msg?msg=hello",
+      failOnStatusCode: false,
+    }).then(res => {
+      expect(res.status).equal(404)
+    })
+    cy.request("http://localhost:3000/api/cmdApiFolder?action=copy")
+    cy.wait(waitTime)
+    cy.request("http://localhost:3000/a/a/a/msg?msg=hello").then(res => {
+      cy.log(res.body)
+      expect(res.body.msg).equal(`a/a/a.ts got: hello`)
+    })
+  })
+  it("can add api file at ruttime", () => {
+    cy.request("http://localhost:3000/api/cmdApiFile?action=delete")
+    cy.wait(waitTime)
+    cy.request({
+      url: "http://localhost:3000/a/b/msg?msg=hello",
+      failOnStatusCode: false,
+    }).then(res => {
+      expect(res.status).equal(404)
+    })
+    cy.request("http://localhost:3000/api/cmdApiFile?action=copy")
+    cy.wait(waitTime)
+    cy.request("http://localhost:3000/a/b/msg?msg=hello").then(res => {
+      cy.log(res.body)
+      expect(res.body.msg).equal(`a/b.ts got: hello`)
+    })
+  })
+  it("will detect folder deletion in api folder and all the url corresponding to it will be removed", () => {
+    cy.request("http://localhost:3000/api/cmdApiFile?action=delete")
+    cy.wait(waitTime)
+    cy.request({
+      url: "http://localhost:3000/a/b/msg?msg=hello",
+      failOnStatusCode: false,
+    }).then(res => {
+      expect(res.status).equal(404)
+    })
+  })
+  it("will detect file deletion in api folder and all the url corresponding to it will be removed", () => {
+    cy.request("http://localhost:3000/api/cmdApiFolder?action=delete")
+    cy.wait(waitTime)
+    cy.request({
+      url: "http://localhost:3000/a/a/a/msg?msg=hello",
+      failOnStatusCode: false,
+    }).then(res => {
+      expect(res.status).equal(404)
+    })
   })
 })
