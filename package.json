@@ -1,6 +1,6 @@
 {
   "name": "ninja-server",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -26,13 +26,17 @@
     "develop"
   ],
   "author": "ali safari",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alisa4y/ninja-server.git"
+  },
   "license": "MIT",
   "dependencies": {
     "bafu": "^0.0.7",
     "bundlex": "^0.0.8",
     "dotenv": "^16.0.3",
     "html-minifier-terser": "^7.0.0-alpha.2",
-    "jsxpiler": "^0.0.1",
+    "jsxpiler": "^0.0.2",
     "pirates": "^4.0.5",
     "terser": "^5.10.0",
     "ts-node": "^10.9.1",
