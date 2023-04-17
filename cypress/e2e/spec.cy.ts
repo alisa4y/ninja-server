@@ -105,7 +105,7 @@ describe("can takes api folder and create api and also linking straight forwardl
   })
 })
 
-describe("parsing jsx ", () => {
+describe("can make it works with jsx ", () => {
   it("can have jsx which exports index function without any parameters so it will render it only once", () => {
     cy.visit("localhost:3000/user/main")
     cy.get("h1").contains("hello from JSX as static page")

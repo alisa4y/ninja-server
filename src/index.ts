@@ -24,6 +24,7 @@ const transpileTsx = $C(transpileJSX, transpileTs)
 addHook(code => transpileTs(code), { ext: ".ts" })
 addHook(code => transpileJSX(code), { ext: ".jsx" })
 addHook(code => transpileTsx(code), { ext: ".tsx" })
+addHook(code => `module.exports= \`${code}\``, { ext: ".svg" })
 
 let g_config: {
   defaultFile: string
@@ -166,9 +167,9 @@ async function handleRequest(
   req: InstanceType<typeof IncomingMessage>,
   res: ServerResponse
 ) {
-  const { url } = req
+  const { url, method } = req
   const end = curry(respond, res)
-  if (site.has(url)) {
+  if (method === "GET" && site.has(url)) {
     end(site.get(url))
   } else if (api.has(stripUrl(url))) {
     let paramObj
@@ -253,7 +254,7 @@ async function setupSiteFile(path: string, ext: string, url: string) {
       const urlObj = site.get(url)
       impundledFiles.add(path)
       setCounter("inc")
-      return await impundler(
+      return impundler(
         path,
         {
           watch: g_config.watch,
@@ -265,7 +266,7 @@ async function setupSiteFile(path: string, ext: string, url: string) {
           urlObj.headers["Content-Length"] = data.length
           setCounter("dec")
         }
-      )
+      ).catch(handleImpundlerError)
     } else if (ext === ".jsx" || ext === ".tsx") {
       return handleJSX(path, url)
     } else file = await readFile(path)
@@ -275,6 +276,10 @@ async function setupSiteFile(path: string, ext: string, url: string) {
   } catch (e) {
     handleError(e, "failed at evaluating pbulic file: " + path)
   }
+}
+function handleImpundlerError(e: Error) {
+  setCounter("dec")
+  console.warn("warning: " + e.message)
 }
 const jsxPlugin = {
   ".jsx": (code: string) => transpileJSX(code),
@@ -323,7 +328,7 @@ function handleJSX(filePath: string, url: string) {
       }
       setCounter("dec")
     }
-  )
+  ).catch(handleImpundlerError)
 }
 
 function setSiteFile(url: string, data: Buffer, headers = {}) {
@@ -549,7 +554,7 @@ function setApi(path: string, pre: string) {
       }
       setCounter("dec")
     }
-  )
+  ).catch(handleImpundlerError)
 }
 function handleError(e: Error, msg?: string) {
   if (msg) console.warn(msg)
@@ -565,7 +570,11 @@ function setApiExports(oApi: Record<string, any>, pre: string) {
         setApiExports(v, `${pre}/${name}/`)
         break
       case "function":
-        api.set(pre + name, oApi[name])
+        const apiUrl = pre + name
+        if (site.has(apiUrl))
+          console.warn(`warning: url: "${apiUrl}" already exist in site url`)
+
+        api.set(apiUrl, oApi[name])
         break
     }
   }
