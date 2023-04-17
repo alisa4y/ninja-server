@@ -3,7 +3,7 @@ clientApi
 cypress
 public
 src
-.env
 testFolder
+.env
 cypress.config.ts
 tsconfig.json
