@@ -1,6 +1,6 @@
 {
   "name": "ninja-server",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "description": "",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -37,7 +37,7 @@
     "bundlex": "^0.1.1",
     "dotenv": "^16.0.3",
     "html-minifier-terser": "^7.0.0-alpha.2",
-    "jsxpiler": "^0.0.6",
+    "jsxpiler": "^0.0.7",
     "pirates": "^4.0.5",
     "terser": "^5.10.0",
     "typescript": "^4.9.4",

@@ -1,5 +1,5 @@
 import { watch, readFileSync, writeFileSync, FSWatcher, existsSync } from "fs"
-import { access, readFile, mkdir, writeFile, stat, readdir } from "fs/promises"
+import { readFile, mkdir, writeFile, stat, readdir } from "fs/promises"
 import { createServer, IncomingMessage, ServerResponse } from "http"
 import { connection, server as webSocketServer } from "websocket"
 import { cell, debounce, ox } from "vaco"
@@ -211,10 +211,16 @@ async function handleRequest(
 async function setup(publicDir: string) {
   if (!existsSync(publicDir)) {
     await mkdir(join(publicDir, "home"), { recursive: true })
-  } else {
-    await setupSiteFiles(publicDir)
-    site.set("/", site.get(g_config.defaultFile))
   }
+  const tsConfigPath = join(publicDir, "tsconfig.json")
+  if (!existsSync(tsConfigPath)) {
+    await writeFile(
+      tsConfigPath,
+      await readFile(join(__dirname, "../public/tsconfig.json"))
+    )
+  }
+  await setupSiteFiles(publicDir)
+  site.set("/", site.get(g_config.defaultFile))
 }
 async function setupSiteFiles(dir: string, url = "/"): Promise<any> {
   const files = await readdir(dir)

@@ -1,6 +1,8 @@
 {
   "compilerOptions": {
-    "jsx": "preserve"
+    "jsx": "preserve",
+    "allowImportingTsExtensions": true,
+    "noEmit": true
   },
   "include": [
     "./**/*.tsx"
