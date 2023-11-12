@@ -13,13 +13,13 @@ import { $C, aim, curry } from "bafu"
 import { addHook } from "pirates"
 // import { minify } from "html-minifier-terser"
 
-const tsJsxOptions = {
+const tsJsxOptions: ts.CompilerOptions = {
   module: ts.ModuleKind.Node16,
   removeComments: true,
   jsx: ts.JsxEmit.Preserve,
   esModuleInterop: true,
 }
-const transpileTs = aim(ts.transpile, tsJsxOptions as ts.CompilerOptions)
+const transpileTs = aim(ts.transpile, tsJsxOptions)
 const transpileTsx = $C(transpileJSX, transpileTs)
 addHook(code => transpileTs(code), { ext: ".ts" })
 addHook(code => transpileJSX(code), { ext: ".jsx" })
@@ -216,7 +216,7 @@ async function setup(publicDir: string) {
   if (!existsSync(tsConfigPath)) {
     await writeFile(
       tsConfigPath,
-      await readFile(join(__dirname, "../public/tsconfig.json"))
+      await readFile(join(__dirname, "./tsconfig4public.json"))
     )
   }
   await setupSiteFiles(publicDir)
