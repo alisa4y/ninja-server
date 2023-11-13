@@ -1,6 +1,6 @@
 {
   "name": "ninja-server",
-  "version": "0.0.9",
+  "version": "0.0.11",
   "description": "",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -34,7 +34,7 @@
   "license": "MIT",
   "dependencies": {
     "bafu": "^0.0.7",
-    "bundlex": "^0.1.1",
+    "bundlex": "^1.0.1",
     "dotenv": "^16.0.3",
     "html-minifier-terser": "^7.0.0-alpha.2",
     "jsxpiler": "^1.0.0",

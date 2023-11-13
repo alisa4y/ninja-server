@@ -216,7 +216,7 @@ async function setup(publicDir: string) {
   if (!existsSync(tsConfigPath)) {
     await writeFile(
       tsConfigPath,
-      await readFile(join(__dirname, "./tsconfig4public.json"))
+      await readFile(join(__dirname, "..", "./tsconfig4public.json"))
     )
   }
   await setupSiteFiles(publicDir)
