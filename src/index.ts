@@ -167,7 +167,8 @@ async function handleRequest(
   req: InstanceType<typeof IncomingMessage>,
   res: ServerResponse
 ) {
-  const { url, method } = req
+  const { method } = req
+  const url = decodeURIComponent(req.url)
   const end = curry(respond, res)
   if (method === "GET" && site.has(url)) {
     end(site.get(url))
@@ -339,6 +340,7 @@ function handleJSX(filePath: string, url: string) {
 
 function setSiteFile(url: string, data: Buffer, headers = {}) {
   const contentType = getContentType(url)
+
   site.set(url, {
     headers: {
       "Content-Type": contentType,
